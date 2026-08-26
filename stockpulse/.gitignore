@@ -9,6 +9,8 @@
 
 # next.js
 /.next/
+
+# 정적 export 산출물 (GitHub Pages 배포는 CI에서 생성한다)
 /out/
 
 # production

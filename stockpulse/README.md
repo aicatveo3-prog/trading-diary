@@ -78,6 +78,50 @@
 
 ---
 
+## 배포
+
+두 가지 방식을 모두 지원하며, 빌드 설정은 `GITHUB_PAGES` 환경변수로 갈립니다.
+
+| | GitHub Pages | Vercel |
+|---|---|---|
+| 현재 UI | ✅ 완전히 동작 | ✅ 동작 |
+| `/api/*` 라우트 | ❌ 서버 없음 | ✅ 동작 |
+| Cron 자동 수집 | ❌ 불가 | ✅ 동작 |
+| 비용 | 무료 | 무료 티어 |
+
+현재 프론트엔드는 API를 호출하지 않고 로컬 데이터로만 렌더링하므로, **지금 시점에는 Pages로도 화면 전체가 정상 동작합니다.** 실 데이터 수집을 가동할 때 Vercel로 옮기면 됩니다.
+
+### GitHub Pages
+
+`.github/workflows/deploy-pages.yml`이 자동 배포합니다. 저장소에서 한 번만 설정하면 됩니다.
+
+1. **Settings → Pages → Build and deployment**
+2. **Source**를 `GitHub Actions`로 변경
+3. 브랜치에 push하면 워크플로가 실행되고, 완료 후 아래 주소로 접속
+
+```
+https://<사용자명>.github.io/trading-diary/
+```
+
+저장소 이름을 바꾸면 워크플로의 `PAGES_BASE_PATH`도 함께 수정해야 합니다. Pages는 `https://user.github.io/<저장소명>/` 하위에 서빙되므로 모든 경로에 접두사가 필요합니다.
+
+로컬에서 정적 빌드를 재현하려면:
+
+```bash
+rm -rf src/app/api          # Pages에서는 실행 불가하므로 제외
+GITHUB_PAGES=true PAGES_BASE_PATH=/trading-diary pnpm build
+npx serve out               # out/ 확인
+git checkout src/app/api    # 복원
+```
+
+### Vercel
+
+1. [vercel.com](https://vercel.com) → GitHub 로그인
+2. 저장소 Import → **Root Directory를 `stockpulse`로 지정**
+3. 환경변수 입력 후 Deploy
+
+---
+
 ## 시작하기
 
 ```bash

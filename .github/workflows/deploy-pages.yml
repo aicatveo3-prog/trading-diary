@@ -1,0 +1,83 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - feature/stockpulse-mvp
+  # 저장소 Actions 탭에서 수동 실행도 가능하게 둔다
+  workflow_dispatch:
+
+# GITHUB_TOKEN에 Pages 배포 권한을 부여한다
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 배포는 동시에 하나만. 진행 중인 실행은 취소하지 않고 큐에 둔다
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stockpulse
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: pnpm 설치
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Node.js 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: stockpulse/pnpm-lock.yaml
+
+      - name: 의존성 설치
+        run: pnpm install --frozen-lockfile
+
+      # GitHub Pages에는 서버 런타임이 없어 Route Handler를 실행할 수 없다.
+      # 정적 export 대상에서 제외한다. (Next.js는 라우트 단위 제외 옵션이 없어
+      # 빌드 직전에 디렉터리를 제거하는 방식을 쓴다. 저장소 소스는 그대로 유지된다.)
+      - name: API 라우트 제외 (정적 배포)
+        run: rm -rf src/app/api
+
+      - name: 정적 빌드
+        env:
+          GITHUB_PAGES: 'true'
+          # 저장소 이름이 바뀌면 이 값도 함께 바꿔야 한다
+          PAGES_BASE_PATH: /trading-diary
+        run: pnpm build
+
+      # Jekyll이 _next 디렉터리를 무시하는 것을 막는다 (밑줄 시작 경로 문제)
+      - name: .nojekyll 추가
+        run: touch out/.nojekyll
+
+      - name: Pages 설정 로드
+        uses: actions/configure-pages@v5
+
+      - name: 산출물 업로드
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: stockpulse/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Pages에 배포
+        id: deployment
+        uses: actions/deploy-pages@v4
