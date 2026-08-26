@@ -1,0 +1,76 @@
+name: Collect Prices
+
+on:
+  schedule:
+    # 한국 장마감(15:30 KST) 이후. cron은 UTC 기준이므로 07:40 UTC = 16:40 KST.
+    # 월~금만 실행하며, 공휴일에는 데이터가 갱신되지 않아 커밋 없이 종료된다.
+    - cron: '40 7 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: collect-prices
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+    defaults:
+      run:
+        working-directory: stockpulse
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 의존성 설치
+        run: pip install --quiet finance-datareader
+
+      # 검증에 실패하면 스크립트가 종료 코드 1을 반환하고 파일을 쓰지 않는다.
+      # 잘못된 데이터를 커밋하는 것보다 낡은 데이터를 유지하는 편이 낫다.
+      - name: 주가 수집
+        run: python scripts/collect_prices.py
+
+      - name: 정합성 검증
+        run: python scripts/verify_consistency.py
+
+      - name: 변경 사항 커밋
+        id: commit
+        run: |
+          if git diff --quiet -- src/data; then
+            echo "데이터 변경 없음 (휴장일이거나 이미 최신) — 커밋을 건너뜁니다"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          TRADING_DATE=$(python -c "import json;print(json.load(open('src/data/prices.json'))['tradingDate'])")
+
+          git add src/data
+          git commit -m "chore(data): 주가 갱신 — 기준일 ${TRADING_DATE}"
+          git push
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "커밋 완료 — 배포를 이어서 실행합니다"
+
+  # 데이터가 실제로 바뀐 경우에만 재배포한다.
+  # GITHUB_TOKEN으로 push한 커밋은 push 이벤트를 트리거하지 않으므로
+  # 여기서 배포 워크플로를 직접 호출해야 한다.
+  deploy:
+    needs: collect
+    if: needs.collect.outputs.changed == 'true'
+    uses: ./.github/workflows/deploy-pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

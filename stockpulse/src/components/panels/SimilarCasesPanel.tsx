@@ -2,7 +2,7 @@
 
 import { c, font } from '@/lib/tokens';
 import { SimilarCases } from '@/lib/event-selectors';
-import { dateFor } from '@/lib/chart-series';
+import { dateFor } from '@/lib/price-data';
 import { pct, shortDate } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
 

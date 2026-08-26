@@ -5,16 +5,17 @@ on:
     branches:
       - main
       - feature/stockpulse-mvp
-  # 저장소 Actions 탭에서 수동 실행도 가능하게 둔다
+  # 다른 워크플로(collect-prices)가 호출할 수 있게 한다.
+  # GITHUB_TOKEN으로 push한 커밋은 push 이벤트를 트리거하지 않으므로,
+  # 데이터 갱신 후에는 이 경로로 배포를 이어붙여야 한다.
+  workflow_call:
   workflow_dispatch:
 
-# GITHUB_TOKEN에 Pages 배포 권한을 부여한다
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# 배포는 동시에 하나만. 진행 중인 실행은 취소하지 않고 큐에 둔다
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -29,6 +30,10 @@ jobs:
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
+        with:
+          # 브랜치 HEAD를 받는다. 호출 워크플로가 방금 데이터를 커밋한 경우
+          # 기본값(caller의 SHA)으로는 이전 데이터를 빌드하게 된다.
+          ref: ${{ github.ref }}
 
       - name: pnpm 설치
         uses: pnpm/action-setup@v4

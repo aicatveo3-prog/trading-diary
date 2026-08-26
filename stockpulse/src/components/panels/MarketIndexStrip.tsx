@@ -2,13 +2,8 @@
 
 import { c, font } from '@/lib/tokens';
 import { pct } from '@/lib/format';
+import { IndexQuote } from '@/lib/price-data';
 import { useConvention } from '@/lib/convention-context';
-
-export interface IndexQuote {
-  name: string;
-  value: number;
-  changeRate: number;
-}
 
 interface MarketIndexStripProps {
   indices: IndexQuote[];
@@ -23,7 +18,7 @@ export default function MarketIndexStrip({ indices }: MarketIndexStripProps) {
         background: c.surface,
         border: `1px solid ${c.border}`,
         display: 'grid',
-        gridTemplateColumns: `repeat(${indices.length}, minmax(0, 1fr))`,
+        gridTemplateColumns: `repeat(${Math.max(1, indices.length)}, minmax(0, 1fr))`,
       }}
     >
       {indices.map((idx, i) => {

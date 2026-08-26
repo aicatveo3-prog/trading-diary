@@ -1,22 +1,23 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { c, font } from '@/lib/tokens';
-import { chartGeometry, dateFor } from '@/lib/chart-series';
-import { StockEvent } from '@/lib/events-data';
-import { pinDiameter } from '@/lib/event-selectors';
+import { c } from '@/lib/tokens';
+import { chartGeometry, dateFor } from '@/lib/price-data';
+import { ResolvedEvent, pinDiameter } from '@/lib/event-selectors';
 import { pct, won, shortDate } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
 
 interface PinnedChartProps {
+  ticker: string;
   periodDays: number;
-  pinnedEvents: StockEvent[];
+  pinnedEvents: ResolvedEvent[];
   numbering: Map<string, number>;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }
 
 export default function PinnedChart({
+  ticker,
   periodDays,
   pinnedEvents,
   numbering,
@@ -26,7 +27,7 @@ export default function PinnedChart({
   const { colors } = useConvention();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  const geo = useMemo(() => chartGeometry(periodDays), [periodDays]);
+  const geo = useMemo(() => chartGeometry(ticker, periodDays), [ticker, periodDays]);
 
   const lineColor = geo.rising ? colors.up : colors.down;
   const hovered = pinnedEvents.find(e => e.id === hoveredId) ?? null;
@@ -102,9 +103,7 @@ export default function PinnedChart({
                 background: fill,
                 color: c.surface,
                 border: `2px solid ${c.surface}`,
-                boxShadow: active
-                  ? '0 0 0 3px rgba(27,30,35,.5)'
-                  : '0 1px 3px rgba(0,0,0,.22)',
+                boxShadow: active ? '0 0 0 3px rgba(27,30,35,.5)' : '0 1px 3px rgba(0,0,0,.22)',
                 font: `700 ${Math.max(9, size * 0.42)}px 'Noto Sans KR', sans-serif`,
                 display: 'flex',
                 alignItems: 'center',

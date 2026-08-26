@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { c, font, Convention } from '@/lib/tokens';
 import { useConvention } from '@/lib/convention-context';
-import { STOCK_META } from '@/lib/events-data';
+import { stockMetaMap } from '@/lib/price-data';
 
 export default function SiteHeader() {
   const { convention, setConvention } = useConvention();
@@ -17,13 +17,13 @@ export default function SiteHeader() {
     if (!term) return;
 
     // 티커 직접 입력이면 그대로, 종목명이면 티커로 변환
-    const byTicker = STOCK_META[term];
-    if (byTicker) {
-      router.push(`/stocks/${byTicker.ticker}`);
+    const metas = stockMetaMap();
+    if (metas[term]) {
+      router.push(`/stocks/${term}`);
       return;
     }
 
-    const match = Object.values(STOCK_META).find(s => s.name === term);
+    const match = Object.values(metas).find(s => s.name === term);
     if (match) router.push(`/stocks/${match.ticker}`);
   };
 

@@ -2,33 +2,38 @@
 
 import Link from 'next/link';
 import { c, font } from '@/lib/tokens';
-import { TODAY_MOVES, STOCK_EVENTS, STOCK_META, hasDetailPage } from '@/lib/events-data';
-import { dateFor } from '@/lib/chart-series';
-import { pct, longDate, shortDate } from '@/lib/format';
+import { eventsFor } from '@/lib/events-data';
+import { todayMoves } from '@/lib/today-moves';
+import {
+  marketIndices,
+  stockMetaMap,
+  changeAt,
+  dateFor,
+  tradingDate,
+  latestQuote,
+} from '@/lib/price-data';
+import { pct, longDate, shortDate, won } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
 import MarketIndexStrip from '@/components/panels/MarketIndexStrip';
 import PromiseCard from '@/components/panels/PromiseCard';
 
-const ASOF = new Date(2026, 7, 26);
-
-const INDICES = [
-  { name: 'KOSPI', value: 2641.23, changeRate: 0.82 },
-  { name: 'KOSDAQ', value: 842.56, changeRate: -0.34 },
-];
-
 /** 워치리스트 — 실 데이터 연결 시 /api/watchlist에서 조회 */
-const WATCHLIST = [
-  { ticker: '005930', changeRate: -2.7 },
-  { ticker: '000660', changeRate: 5.2 },
-  { ticker: '035720', changeRate: -0.5 },
-  { ticker: '035420', changeRate: 1.1 },
-];
+const WATCHED = ['005930', '000660', '035720', '035420'];
 
 export default function DashboardPage() {
   const { colors } = useConvention();
 
-  // 오늘 보도된 이벤트만 (daysAgo === 0)
-  const todayEvents = STOCK_EVENTS.filter(e => e.daysAgo === 0);
+  const indices = marketIndices();
+  const moves = todayMoves(5);
+  const asOfDate = dateFor(0);
+  const metas = stockMetaMap();
+
+  // 오늘 보도된 예시 이벤트 (전 종목)
+  const todayEvents = Object.keys(metas).flatMap(t =>
+    eventsFor(t)
+      .filter(e => e.daysAgo === 0)
+      .map(e => ({ event: e, meta: metas[t] }))
+  );
 
   return (
     <div className="gc-shell">
@@ -47,14 +52,14 @@ export default function DashboardPage() {
             오늘
           </h1>
           <p style={{ margin: 0, fontSize: 12.5, color: c.inkMid }}>
-            {longDate(ASOF)} 장마감 기준 · 주가가 움직인 날에 무슨 일이 있었는지를 모아둡니다.
+            {longDate(asOfDate)} 장마감 기준 · 주가가 움직인 날에 무슨 일이 있었는지를 모아둡니다.
           </p>
         </div>
 
         {/* 지수 */}
-        <MarketIndexStrip indices={INDICES} />
+        <MarketIndexStrip indices={indices} />
 
-        {/* 오늘, 뉴스로 설명되는 움직임 — 대시보드에서는 전체 폭으로 */}
+        {/* 오늘 크게 움직인 종목 */}
         <div style={{ background: c.surface, border: `1px solid ${c.border}` }}>
           <div
             style={{
@@ -67,30 +72,31 @@ export default function DashboardPage() {
             }}
           >
             <span style={{ fontFamily: font.serif, fontSize: 16, fontWeight: 700 }}>
-              뉴스로 설명되는 움직임
+              오늘 크게 움직인 종목
             </span>
-            <span style={{ fontSize: 11.5, color: c.inkFaint }}>
-              중요도 = 변동폭 × 보도 매체 수
-            </span>
+            <span style={{ fontSize: 11.5, color: c.inkFaint }}>변동폭 기준 · 수집 종목 내</span>
           </div>
 
           <div>
-            {TODAY_MOVES.map(move => {
+            {moves.map(move => {
               const dirColor = move.changeRate >= 0 ? colors.up : colors.down;
-              const linkable = hasDetailPage(move.ticker);
+              const quote = latestQuote(move.ticker);
 
-              const rowStyle = {
-                display: 'grid' as const,
-                gridTemplateColumns: '1fr 96px',
-                gap: 16,
-                alignItems: 'center' as const,
-                padding: '15px 26px',
-                borderBottom: `1px solid ${c.borderFaint}`,
-                color: c.ink,
-              };
-
-              const body = (
-                <>
+              return (
+                <Link
+                  key={move.ticker}
+                  href={`/stocks/${move.ticker}`}
+                  className="gc-row"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 110px',
+                    gap: 16,
+                    alignItems: 'center',
+                    padding: '15px 26px',
+                    borderBottom: `1px solid ${c.borderFaint}`,
+                    color: c.ink,
+                  }}
+                >
                   <div style={{ minWidth: 0 }}>
                     <div
                       style={{
@@ -102,14 +108,20 @@ export default function DashboardPage() {
                       }}
                     >
                       <span style={{ fontSize: 14.5, fontWeight: 500 }}>{move.name}</span>
-                      <span style={{ fontSize: 11, color: c.inkFaint }}>{move.ticker}</span>
-                      {!linkable && (
-                        <span style={{ fontSize: 10.5, color: c.inkFaint }}>상세 준비 중</span>
-                      )}
+                      <span style={{ fontSize: 11, color: c.inkFaint }}>
+                        {move.ticker} · {move.market}
+                      </span>
                     </div>
-                    <div style={{ fontSize: 12, color: c.inkSoft, lineHeight: 1.5 }}>
-                      {move.cause}
-                    </div>
+                    {move.cause ? (
+                      <div style={{ fontSize: 12, color: c.inkSoft, lineHeight: 1.5 }}>
+                        {move.cause}
+                        <span style={{ color: c.inkFaint }}> · 예시 뉴스</span>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: c.inkFaint, lineHeight: 1.5 }}>
+                        관련 뉴스 미수집
+                      </div>
+                    )}
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div
@@ -122,39 +134,39 @@ export default function DashboardPage() {
                     >
                       {pct(move.changeRate)}
                     </div>
-                    <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 2 }}>당일</div>
+                    <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 2 }}>
+                      {won(quote.price)}
+                    </div>
                   </div>
-                </>
-              );
-
-              // 상세 페이지가 없는 종목(미국 주식 등)은 링크를 걸지 않는다 —
-              // Next.js가 프리페치하면서 404를 발생시키기 때문이다.
-              return linkable ? (
-                <Link key={move.ticker} href={`/stocks/${move.ticker}`} className="gc-row" style={rowStyle}>
-                  {body}
                 </Link>
-              ) : (
-                <div key={move.ticker} style={rowStyle}>
-                  {body}
-                </div>
               );
             })}
           </div>
         </div>
 
-        {/* 오늘 보도된 이벤트 */}
+        {/* 오늘 들어온 소식 */}
         {todayEvents.length > 0 && (
           <div style={{ background: c.surface, border: `1px solid ${c.border}` }}>
-            <div style={{ padding: '18px 26px 14px', borderBottom: `1px solid ${c.borderSoft}` }}>
+            <div
+              style={{
+                padding: '18px 26px 14px',
+                borderBottom: `1px solid ${c.borderSoft}`,
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}
+            >
               <span style={{ fontFamily: font.serif, fontSize: 16, fontWeight: 700 }}>
                 오늘 들어온 소식
               </span>
+              <span style={{ fontSize: 11.5, color: c.inkFaint }}>예시 데이터</span>
             </div>
             <div>
-              {todayEvents.map(event => (
+              {todayEvents.map(({ event, meta }) => (
                 <Link
                   key={event.id}
-                  href="/stocks/005930"
+                  href={`/stocks/${event.ticker}`}
                   className="gc-row"
                   style={{
                     display: 'block',
@@ -167,6 +179,9 @@ export default function DashboardPage() {
                     {event.headline}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, color: c.inkMid, fontWeight: 500 }}>
+                      {meta.name}
+                    </span>
                     <span
                       style={{
                         fontSize: 10.5,
@@ -197,18 +212,19 @@ export default function DashboardPage() {
             워치리스트
           </div>
           <div style={{ display: 'grid', gap: 11 }}>
-            {WATCHLIST.map(item => {
-              const meta = STOCK_META[item.ticker];
+            {WATCHED.map(ticker => {
+              const meta = metas[ticker];
               if (!meta) return null;
-              const dirColor = item.changeRate >= 0 ? colors.up : colors.down;
+              const rate = changeAt(ticker, 0);
+              const dirColor = rate >= 0 ? colors.up : colors.down;
               return (
                 <Link
-                  key={item.ticker}
-                  href={`/stocks/${item.ticker}`}
+                  key={ticker}
+                  href={`/stocks/${ticker}`}
                   className="gc-fade"
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 58px',
+                    gridTemplateColumns: '1fr 62px',
                     gap: 10,
                     alignItems: 'center',
                     paddingBottom: 11,
@@ -231,12 +247,36 @@ export default function DashboardPage() {
                       color: dirColor,
                     }}
                   >
-                    {pct(item.changeRate)}
+                    {pct(rate)}
                   </div>
                 </Link>
               );
             })}
           </div>
+        </div>
+
+        <div
+          style={{
+            border: `1px solid ${c.borderAlt}`,
+            background: c.surfaceAlt,
+            padding: '16px 20px',
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.09em',
+              color: c.inkSoft,
+              marginBottom: 7,
+            }}
+          >
+            데이터 출처
+          </div>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.7, color: c.inkStrong }}>
+            주가·지수는 실제 시장 데이터입니다 (기준일 {tradingDate()}). 뉴스 헤드라인은 아직 예시이며,
+            수집이 연결되면 실제 보도로 대체됩니다.
+          </p>
         </div>
 
         <PromiseCard />

@@ -1,14 +1,14 @@
 'use client';
 
 import { c, font } from '@/lib/tokens';
-import { StockEvent, EventType } from '@/lib/events-data';
-import { SortMode } from '@/lib/event-selectors';
-import { dateFor } from '@/lib/chart-series';
+import { EventType } from '@/lib/events-data';
+import { ResolvedEvent, SortMode } from '@/lib/event-selectors';
+import { dateFor } from '@/lib/price-data';
 import { pct, shortDate } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
 
 interface NewsTimelineProps {
-  events: StockEvent[];
+  events: ResolvedEvent[];
   types: EventType[];
   filter: EventType | '전체';
   onFilterChange: (t: EventType | '전체') => void;
@@ -18,8 +18,6 @@ interface NewsTimelineProps {
   pinnedIds: Set<string>;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  /** 모든 해설을 펼친 상태로 둘지 */
-  expandAll?: boolean;
 }
 
 export default function NewsTimeline({
@@ -33,7 +31,6 @@ export default function NewsTimeline({
   pinnedIds,
   selectedId,
   onSelect,
-  expandAll = false,
 }: NewsTimelineProps) {
   const chipOptions: (EventType | '전체')[] = ['전체', ...types];
 
@@ -100,6 +97,21 @@ export default function NewsTimeline({
         </button>
       </div>
 
+      {/* 뉴스가 예시임을 명시 — 주가는 실제이므로 혼동을 막아야 한다 */}
+      <div
+        style={{
+          padding: '10px 26px',
+          background: c.surfaceAlt,
+          borderBottom: `1px solid ${c.borderSoft}`,
+          fontSize: 11.5,
+          color: c.inkMid,
+          lineHeight: 1.5,
+        }}
+      >
+        아래 헤드라인은 화면 구조를 보여주기 위한 <strong style={{ color: c.ink }}>예시</strong>입니다.
+        차트와 등락률은 실제 시장 데이터입니다.
+      </div>
+
       {/* 이벤트 목록 */}
       <div>
         {events.length === 0 ? (
@@ -113,7 +125,7 @@ export default function NewsTimeline({
               event={event}
               number={numbering.get(event.id)}
               isPinned={pinnedIds.has(event.id)}
-              open={expandAll || selectedId === event.id}
+              open={selectedId === event.id}
               selected={selectedId === event.id}
               onClick={() => onSelect(selectedId === event.id ? null : event.id)}
             />
@@ -125,7 +137,7 @@ export default function NewsTimeline({
 }
 
 interface TimelineRowProps {
-  event: StockEvent;
+  event: ResolvedEvent;
   number?: number;
   isPinned: boolean;
   open: boolean;
@@ -136,7 +148,12 @@ interface TimelineRowProps {
 function TimelineRow({ event, number, isPinned, open, selected, onClick }: TimelineRowProps) {
   const { colors } = useConvention();
   const dayColor = event.dayChange >= 0 ? colors.up : colors.down;
-  const weekColor = event.week1Change >= 0 ? colors.up : colors.down;
+  const weekColor =
+    event.week1Change === null
+      ? c.inkFaint
+      : event.week1Change >= 0
+        ? colors.up
+        : colors.down;
 
   return (
     <div
@@ -246,7 +263,8 @@ function TimelineRow({ event, number, isPinned, open, selected, onClick }: Timel
               <div>
                 <div style={{ fontSize: 10, color: c.inkSoft, marginBottom: 2 }}>1주 후</div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: weekColor }}>
-                  {pct(event.week1Change)}
+                  {/* 아직 1주가 지나지 않은 최근 이벤트는 값이 없다 */}
+                  {event.week1Change === null ? '아직' : pct(event.week1Change)}
                 </div>
               </div>
               <div
@@ -277,7 +295,7 @@ function TimelineRow({ event, number, isPinned, open, selected, onClick }: Timel
                     color: c.inkStrong,
                   }}
                 >
-                  {article.source} <span style={{ color: c.inkFaint }}>↗</span>
+                  {article.source}
                 </span>
               ))}
             </div>
