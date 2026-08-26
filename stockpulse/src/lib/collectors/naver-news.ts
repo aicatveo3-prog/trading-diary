@@ -11,9 +11,16 @@
  */
 
 import { NaverNewsResponse, NaverNewsItem } from '@/types';
-import { stripHtml } from '@/lib/utils';
 
 const NAVER_API_URL = 'https://openapi.naver.com/v1/search/news.json';
+
+/**
+ * 네이버 API 응답의 제목/요약에는 <b> 태그와 HTML 엔티티가 섞여 온다.
+ * 저장 전에 여기서 걷어낸다.
+ */
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, '');
+}
 
 interface FetchNewsOptions {
   query: string;

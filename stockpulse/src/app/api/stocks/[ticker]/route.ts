@@ -11,10 +11,10 @@ import { createServiceClient } from '@/lib/supabase';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { ticker: string } }
+  { params }: { params: Promise<{ ticker: string }> }
 ) {
   try {
-    const { ticker } = params;
+    const { ticker } = await params;
     const { searchParams } = new URL(request.url);
     const days = parseInt(searchParams.get('days') || '90');
     const newsLimit = parseInt(searchParams.get('news_limit') || '20');

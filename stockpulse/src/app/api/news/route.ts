@@ -47,8 +47,8 @@ export async function GET(request: NextRequest) {
       }
 
       const news = (data || [])
-        .map(m => ({ ...m.news_articles, relevance_score: m.relevance_score, impact_type: m.impact_type }))
-        .filter(n => {
+        .map((m: any) => ({ ...m.news_articles, relevance_score: m.relevance_score, impact_type: m.impact_type }))
+        .filter((n: any) => {
           if (sentiment && n.sentiment_label !== sentiment) return false;
           if (majorOnly && !n.is_major) return false;
           return true;
