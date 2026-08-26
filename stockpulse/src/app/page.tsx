@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { c, font } from '@/lib/tokens';
-import { TODAY_MOVES, STOCK_EVENTS, STOCK_META } from '@/lib/events-data';
+import { TODAY_MOVES, STOCK_EVENTS, STOCK_META, hasDetailPage } from '@/lib/events-data';
 import { dateFor } from '@/lib/chart-series';
 import { pct, longDate, shortDate } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
@@ -77,21 +77,20 @@ export default function DashboardPage() {
           <div>
             {TODAY_MOVES.map(move => {
               const dirColor = move.changeRate >= 0 ? colors.up : colors.down;
-              return (
-                <Link
-                  key={move.ticker}
-                  href={`/stocks/${move.ticker}`}
-                  className="gc-row"
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 96px',
-                    gap: 16,
-                    alignItems: 'center',
-                    padding: '15px 26px',
-                    borderBottom: `1px solid ${c.borderFaint}`,
-                    color: c.ink,
-                  }}
-                >
+              const linkable = hasDetailPage(move.ticker);
+
+              const rowStyle = {
+                display: 'grid' as const,
+                gridTemplateColumns: '1fr 96px',
+                gap: 16,
+                alignItems: 'center' as const,
+                padding: '15px 26px',
+                borderBottom: `1px solid ${c.borderFaint}`,
+                color: c.ink,
+              };
+
+              const body = (
+                <>
                   <div style={{ minWidth: 0 }}>
                     <div
                       style={{
@@ -104,6 +103,9 @@ export default function DashboardPage() {
                     >
                       <span style={{ fontSize: 14.5, fontWeight: 500 }}>{move.name}</span>
                       <span style={{ fontSize: 11, color: c.inkFaint }}>{move.ticker}</span>
+                      {!linkable && (
+                        <span style={{ fontSize: 10.5, color: c.inkFaint }}>상세 준비 중</span>
+                      )}
                     </div>
                     <div style={{ fontSize: 12, color: c.inkSoft, lineHeight: 1.5 }}>
                       {move.cause}
@@ -122,7 +124,19 @@ export default function DashboardPage() {
                     </div>
                     <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 2 }}>당일</div>
                   </div>
+                </>
+              );
+
+              // 상세 페이지가 없는 종목(미국 주식 등)은 링크를 걸지 않는다 —
+              // Next.js가 프리페치하면서 404를 발생시키기 때문이다.
+              return linkable ? (
+                <Link key={move.ticker} href={`/stocks/${move.ticker}`} className="gc-row" style={rowStyle}>
+                  {body}
                 </Link>
+              ) : (
+                <div key={move.ticker} style={rowStyle}>
+                  {body}
+                </div>
               );
             })}
           </div>

@@ -254,3 +254,14 @@ export const STOCK_META: Record<string, { name: string; ticker: string; market: 
   '247540': { name: '에코프로비엠', ticker: '247540', market: 'KOSDAQ' },
   '012450': { name: '한화에어로스페이스', ticker: '012450', market: 'KOSPI' },
 };
+
+/**
+ * 상세 페이지가 존재하는 종목인지 확인한다.
+ *
+ * 정적 배포에서는 generateStaticParams에 포함된 티커만 페이지가 생성되므로,
+ * 목록에 없는 종목으로 링크를 걸면 404가 된다.
+ * 미국 주식(예: NVDA)은 아직 지원 범위가 아니라 목록에 없다.
+ */
+export function hasDetailPage(ticker: string): boolean {
+  return ticker in STOCK_META;
+}
