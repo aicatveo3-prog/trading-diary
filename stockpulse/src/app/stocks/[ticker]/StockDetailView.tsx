@@ -2,74 +2,33 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { c, font } from '@/lib/tokens';
-import { eventsFor, PERIODS, PeriodKey, EventType } from '@/lib/events-data';
-import {
-  resolveEvents,
-  selectVisibleEvents,
-  applyTimelineView,
-  similarCases,
-  SortMode,
-} from '@/lib/event-selectors';
-import { latestQuote, stockMeta, tradingDate, dateFor, closeSeries } from '@/lib/price-data';
+import { PERIODS, PeriodKey } from '@/lib/events-data';
+import { latestQuote, stockMeta, dateFor, closeSeries, chartGeometry } from '@/lib/price-data';
+import { newsFor, hasNews, sentimentSummary } from '@/lib/news-data';
 import { shortDate } from '@/lib/format';
 
 import StockHeaderCard from '@/components/stock/StockHeaderCard';
 import PeriodSelector from '@/components/stock/PeriodSelector';
 import PinnedChart from '@/components/stock/PinnedChart';
-import NewsTimeline from '@/components/news/NewsTimeline';
-import SimilarCasesPanel from '@/components/panels/SimilarCasesPanel';
+import RealNewsTimeline from '@/components/news/RealNewsTimeline';
 import PromiseCard from '@/components/panels/PromiseCard';
-
-/** 차트에 꽂을 핀 개수 상한 — 이보다 많으면 차트가 읽히지 않는다 */
-const MAX_PINS = 5;
 
 interface StockDetailViewProps {
   ticker: string;
 }
 
 export default function StockDetailView({ ticker }: StockDetailViewProps) {
-  const [period, setPeriod] = useState<PeriodKey>('1M');
-  const [filter, setFilter] = useState<EventType | '전체'>('전체');
-  const [sort, setSort] = useState<SortMode>('recent');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [period, setPeriod] = useState<PeriodKey>('3M');
+  const [newsFilter, setNewsFilter] = useState('전체');
   const [watched, setWatched] = useState(false);
 
   const meta = stockMeta(ticker);
   const quote = latestQuote(ticker);
+  const news = newsFor(ticker);
+  const sentiment = sentimentSummary(ticker);
 
-  // 실제 보유한 거래일 수를 넘지 않도록 기간을 제한한다
   const available = closeSeries(ticker).length;
-  const periodDays = Math.min(PERIODS.find(p => p.key === period)?.days ?? 22, available);
-
-  // 예시 이벤트에 실제 등락률을 채운다
-  const resolved = useMemo(() => resolveEvents(ticker, eventsFor(ticker)), [ticker]);
-
-  const visible = useMemo(
-    () => selectVisibleEvents(resolved, periodDays, MAX_PINS),
-    [resolved, periodDays]
-  );
-
-  const timelineEvents = useMemo(
-    () => applyTimelineView(visible.all, filter, sort),
-    [visible.all, filter, sort]
-  );
-
-  const pinnedIds = useMemo(() => new Set(visible.pinned.map(e => e.id)), [visible.pinned]);
-
-  const selectedEvent = resolved.find(e => e.id === selectedId) ?? visible.all[0] ?? null;
-  const similar = useMemo(
-    () => (selectedEvent ? similarCases(resolved, selectedEvent) : null),
-    [resolved, selectedEvent]
-  );
-
-  /** 차트 핀 클릭 → 선택 + 필터 해제 + 해당 타임라인 항목으로 스크롤 */
-  const handlePinSelect = useCallback((id: string) => {
-    setSelectedId(id);
-    setFilter('전체');
-    requestAnimationFrame(() => {
-      document.getElementById(`event-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-  }, []);
+  const periodDays = Math.min(PERIODS.find(p => p.key === period)?.days ?? 64, available);
 
   if (!meta) {
     return (
@@ -82,8 +41,6 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
       </div>
     );
   }
-
-  const hasEvents = resolved.length > 0;
 
   return (
     <div className="gc-shell">
@@ -103,7 +60,7 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
             onToggleWatch={() => setWatched(v => !v)}
           />
 
-          {/* 핀 개수 안내 + 기간 선택 */}
+          {/* 기간 선택 */}
           <div
             style={{
               padding: '0 26px 14px',
@@ -116,15 +73,8 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
             }}
           >
             <div style={{ fontSize: 12.5, color: c.inkMid }}>
-              {hasEvents ? (
-                <>
-                  이 기간에 꽂힌 뉴스 핀{' '}
-                  <strong style={{ color: c.ink }}>{visible.pinned.length}개</strong> · 전체 이벤트{' '}
-                  {visible.all.length}건
-                </>
-              ) : (
-                <>뉴스 수집이 연결되면 이 자리에 핀이 표시됩니다</>
-              )}
+              관련 뉴스 <strong style={{ color: c.ink }}>{news.length}건</strong> 수집됨
+              {' · '}긍정 {sentiment.positive} / 부정 {sentiment.negative} / 중립 {sentiment.neutral}
             </div>
             <PeriodSelector selected={period} onChange={setPeriod} />
           </div>
@@ -132,53 +82,58 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
           <PinnedChart
             ticker={ticker}
             periodDays={periodDays}
-            pinnedEvents={visible.pinned}
-            numbering={visible.numbering}
-            selectedId={selectedId}
-            onSelect={handlePinSelect}
+            pinnedEvents={[]}
+            numbering={new Map()}
+            selectedId={null}
+            onSelect={() => {}}
           />
         </div>
 
-        {/* 뉴스 타임라인 */}
-        {hasEvents ? (
-          <NewsTimeline
-            events={timelineEvents}
-            types={visible.types}
-            filter={filter}
-            onFilterChange={setFilter}
-            sort={sort}
-            onSortToggle={() => setSort(s => (s === 'recent' ? 'move' : 'recent'))}
-            numbering={visible.numbering}
-            pinnedIds={pinnedIds}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-          />
-        ) : (
-          <div style={{ background: c.surface, border: `1px solid ${c.border}` }}>
-            <div style={{ padding: '18px 26px 14px', borderBottom: `1px solid ${c.borderSoft}` }}>
-              <span style={{ fontFamily: font.serif, fontSize: 16, fontWeight: 700 }}>
-                뉴스 타임라인
-              </span>
-            </div>
-            <div style={{ padding: '38px 26px', textAlign: 'center' }}>
-              <p style={{ margin: '0 0 6px', fontSize: 13.5, color: c.inkStrong }}>
-                이 종목의 뉴스는 아직 수집되지 않았습니다.
-              </p>
-              <p style={{ margin: 0, fontSize: 12, color: c.inkFaint, lineHeight: 1.6 }}>
-                위 차트의 주가는 실제 데이터입니다. 뉴스 수집이 연결되면
-                <br />
-                이 자리에 그날 무슨 일이 있었는지 시간 순서대로 쌓입니다.
-              </p>
-            </div>
-          </div>
-        )}
+        {/* 뉴스 타임라인 — 실제 Google News 기사 */}
+        <RealNewsTimeline
+          news={news}
+          filter={newsFilter}
+          onFilterChange={setNewsFilter}
+        />
       </div>
 
       {/* 사이드바 */}
       <aside className="gc-aside">
-        {similar && <SimilarCasesPanel data={similar} stockName={meta.name} />}
+        {/* 감성 요약 */}
+        <div style={{ background: c.surface, border: `1px solid ${c.border}`, padding: '18px 20px' }}>
+          <div style={{ fontFamily: font.serif, fontSize: 15, fontWeight: 700, marginBottom: 15 }}>
+            뉴스 감성 분포
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+            <StatBox label="긍정" count={sentiment.positive} color="#17805a" />
+            <StatBox label="부정" count={sentiment.negative} color="#c0392b" />
+            <StatBox label="중립" count={sentiment.neutral} color="#6f747c" />
+          </div>
+          <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden' }}>
+            {news.length > 0 && (
+              <>
+                <div style={{ width: `${(sentiment.positive / news.length) * 100}%`, background: '#17805a' }} />
+                <div style={{ width: `${(sentiment.neutral / news.length) * 100}%`, background: '#d9dade' }} />
+                <div style={{ width: `${(sentiment.negative / news.length) * 100}%`, background: '#c0392b' }} />
+              </>
+            )}
+          </div>
+          <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 10, lineHeight: 1.55 }}>
+            키워드 기반 자동 분류입니다. 참고용이며 정확도에 한계가 있습니다.
+          </div>
+        </div>
+
         <PromiseCard />
       </aside>
+    </div>
+  );
+}
+
+function StatBox({ label, count, color }: { label: string; count: number; color: string }) {
+  return (
+    <div style={{ flex: 1, textAlign: 'center', padding: '10px 0', background: c.surfaceAlt, borderRadius: 4 }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color }}>{count}</div>
+      <div style={{ fontSize: 10.5, color: c.inkSoft, marginTop: 2 }}>{label}</div>
     </div>
   );
 }
