@@ -3,34 +3,32 @@
 import { useMemo, useState } from 'react';
 import { c } from '@/lib/tokens';
 import { chartGeometry, dateFor } from '@/lib/price-data';
-import { ResolvedEvent, pinDiameter } from '@/lib/event-selectors';
+import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
 import { pct, won, shortDate } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
 
 interface PinnedChartProps {
   ticker: string;
   periodDays: number;
-  pinnedEvents: ResolvedEvent[];
-  numbering: Map<string, number>;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  pins: NewsPin[];
+  selectedDate: string | null;
+  onSelect: (tradingDate: string) => void;
 }
 
 export default function PinnedChart({
   ticker,
   periodDays,
-  pinnedEvents,
-  numbering,
-  selectedId,
+  pins,
+  selectedDate,
   onSelect,
 }: PinnedChartProps) {
   const { colors } = useConvention();
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [hoveredDate, setHoveredDate] = useState<string | null>(null);
 
   const geo = useMemo(() => chartGeometry(ticker, periodDays), [ticker, periodDays]);
 
   const lineColor = geo.rising ? colors.up : colors.down;
-  const hovered = pinnedEvents.find(e => e.id === hoveredId) ?? null;
+  const hovered = pins.find(p => p.tradingDate === hoveredDate) ?? null;
   const hoveredPos = hovered ? geo.positionFor(hovered.daysAgo) : null;
 
   return (
@@ -76,22 +74,22 @@ export default function PinnedChart({
         </div>
 
         {/* 뉴스 핀 */}
-        {pinnedEvents.map(event => {
-          const pos = geo.positionFor(event.daysAgo);
+        {pins.map(pin => {
+          const pos = geo.positionFor(pin.daysAgo);
           if (!pos) return null;
 
-          const size = pinDiameter(event.dayChange);
-          const active = selectedId === event.id || hoveredId === event.id;
-          const fill = event.dayChange >= 0 ? colors.up : colors.down;
+          const size = newsPinDiameter(pin.articles.length);
+          const active = selectedDate === pin.tradingDate || hoveredDate === pin.tradingDate;
+          const fill = pin.changeRate >= 0 ? colors.up : colors.down;
 
           return (
             <button
-              key={event.id}
+              key={pin.tradingDate}
               className="gc-pin"
-              onMouseEnter={() => setHoveredId(event.id)}
-              onMouseLeave={() => setHoveredId(null)}
-              onClick={() => onSelect(event.id)}
-              aria-label={`${shortDate(dateFor(event.daysAgo))} ${event.headline}`}
+              onMouseEnter={() => setHoveredDate(pin.tradingDate)}
+              onMouseLeave={() => setHoveredDate(null)}
+              onClick={() => onSelect(pin.tradingDate)}
+              aria-label={`${shortDate(dateFor(pin.daysAgo))} 뉴스 ${pin.articles.length}건`}
               style={{
                 position: 'absolute',
                 left: `${pos.xPct}%`,
@@ -104,7 +102,7 @@ export default function PinnedChart({
                 color: c.surface,
                 border: `2px solid ${c.surface}`,
                 boxShadow: active ? '0 0 0 3px rgba(27,30,35,.5)' : '0 1px 3px rgba(0,0,0,.22)',
-                font: `700 ${Math.max(9, size * 0.42)}px 'Noto Sans KR', sans-serif`,
+                font: `700 ${Math.max(9, size * 0.4)}px 'Noto Sans KR', sans-serif`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -113,7 +111,7 @@ export default function PinnedChart({
                 zIndex: active ? 6 : 4,
               }}
             >
-              {numbering.get(event.id)}
+              {pin.number}
             </button>
           );
         })}
@@ -125,9 +123,9 @@ export default function PinnedChart({
               position: 'absolute',
               left: hoveredPos.xPct > 62 ? 'auto' : `${hoveredPos.xPct}%`,
               right: hoveredPos.xPct > 62 ? `${100 - hoveredPos.xPct}%` : 'auto',
-              top: `${Math.min(hoveredPos.yPct, 58)}%`,
+              top: `${Math.min(hoveredPos.yPct, 55)}%`,
               marginTop: 18,
-              width: 268,
+              width: 280,
               background: c.surface,
               border: `1px solid ${c.borderBtn}`,
               boxShadow: '0 6px 22px rgba(24,26,30,.14)',
@@ -136,7 +134,7 @@ export default function PinnedChart({
               pointerEvents: 'none',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 10.5, color: c.inkSoft }}>
                 {shortDate(dateFor(hovered.daysAgo))}
               </span>
@@ -149,23 +147,40 @@ export default function PinnedChart({
                   borderRadius: 2,
                 }}
               >
-                {hovered.type}
+                뉴스 {hovered.articles.length}건
               </span>
               <span
                 style={{
                   fontSize: 11.5,
                   fontWeight: 700,
                   marginLeft: 'auto',
-                  color: hovered.dayChange >= 0 ? colors.up : colors.down,
+                  color: hovered.changeRate >= 0 ? colors.up : colors.down,
                 }}
               >
-                {pct(hovered.dayChange)}
+                {pct(hovered.changeRate)}
               </span>
             </div>
-            <div style={{ fontSize: 12.5, lineHeight: 1.5, fontWeight: 500 }}>{hovered.headline}</div>
-            <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 6 }}>
-              {hovered.sources}개 매체 보도 · 클릭하면 아래에서 이어 읽기
-            </div>
+
+            {/* 그 날의 대표 기사 최대 3건 */}
+            {hovered.articles.slice(0, 3).map(a => (
+              <div
+                key={a.id}
+                style={{
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                  marginBottom: 6,
+                  paddingLeft: 8,
+                  borderLeft: `2px solid ${c.borderInput}`,
+                }}
+              >
+                {a.title.length > 42 ? a.title.slice(0, 42) + '…' : a.title}
+              </div>
+            ))}
+            {hovered.articles.length > 3 && (
+              <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 4 }}>
+                외 {hovered.articles.length - 3}건 · 클릭하면 아래에서 전부 보기
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -192,7 +207,7 @@ export default function PinnedChart({
         }}
       >
         <span style={{ fontSize: 11.5, color: c.inkSoft }}>
-          핀 색 = 그날의 방향 · 크기 = 변동폭 · 번호 = 최신순 타임라인 순서
+          핀 색 = 그날의 방향 · 크기 = 기사 건수 · 번호 = 최신순
         </span>
         <span style={{ fontSize: 11.5, color: c.inkSoft, marginLeft: 'auto' }}>
           같은 날에 일어난 일이라는 뜻이며, 원인을 단정하지 않습니다.
