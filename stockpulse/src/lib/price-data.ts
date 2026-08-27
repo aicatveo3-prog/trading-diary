@@ -125,6 +125,53 @@ export function volumeAt(ticker: string, daysAgo: number): number {
 
 // --- 차트 기하 ---
 
+/** 하루치 시세 */
+export interface DayQuote {
+  daysAgo: number;
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  changeRate: number;
+}
+
+/** 특정 거래일의 시세 전체 */
+export function dayQuote(ticker: string, daysAgo: number): DayQuote | null {
+  const s = series(ticker);
+  const dates = prices.dates;
+  const i = dates.length - 1 - daysAgo;
+  if (i < 0 || i >= dates.length) return null;
+
+  const prevClose = i > 0 ? s.c[i - 1] : s.c[i];
+  return {
+    daysAgo,
+    date: dates[i],
+    open: s.o[i],
+    high: s.h[i],
+    low: s.l[i],
+    close: s.c[i],
+    volume: s.v[i],
+    changeRate: prevClose === 0 ? 0 : ((s.c[i] - prevClose) / prevClose) * 100,
+  };
+}
+
+/** 캔들 하나의 좌표 (모두 % 단위) */
+export interface CandleGeometry {
+  daysAgo: number;
+  xPct: number;
+  /** 몸통 상단(시가·종가 중 높은 쪽) */
+  bodyTopPct: number;
+  /** 몸통 높이 */
+  bodyHeightPct: number;
+  /** 꼬리 상단(고가) */
+  highPct: number;
+  /** 꼬리 하단(저가) */
+  lowPct: number;
+  rising: boolean;
+}
+
 export interface ChartGeometry {
   linePoints: string;
   areaPoints: string;
@@ -132,7 +179,17 @@ export interface ChartGeometry {
   yMax: number;
   yMin: number;
   xLabels: string[];
+  /** 실제로 그려진 거래일 수 */
+  span: number;
+  /** y축 눈금 (위에서 아래로) */
+  yTicks: { value: number; yPct: number }[];
+  /** 캔들 좌표 */
+  candles: CandleGeometry[];
+  /** 거래량 바 (heightPct는 최대 거래량 대비 비율) */
+  volumes: { daysAgo: number; xPct: number; heightPct: number; rising: boolean }[];
   positionFor: (daysAgo: number) => { xPct: number; yPct: number } | null;
+  /** 차트 가로 위치(0~100%)에 가장 가까운 거래일 */
+  nearestDay: (xPct: number) => number | null;
 }
 
 const VIEW_W = 1000;
@@ -143,40 +200,92 @@ const VIEW_H = 296;
  * 차트 라이브러리를 쓰지 않으므로 여기서 직접 스케일링한다.
  */
 export function chartGeometry(ticker: string, periodDays: number): ChartGeometry {
-  const all = closeSeries(ticker);
-  const span = Math.min(periodDays, all.length);
-  const values = all.slice(all.length - span);
+  const s = series(ticker);
+  const total = s.c.length;
+  const span = Math.max(1, Math.min(periodDays, total));
+  const offset = total - span;
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const pad = (max - min) * 0.14 || 1;
+  const closes = s.c.slice(offset);
+  const highs = s.h.slice(offset);
+  const lows = s.l.slice(offset);
+  const opens = s.o.slice(offset);
+  const volumes = s.v.slice(offset);
+
+  // 캔들의 꼬리까지 보이려면 고가·저가를 스케일에 포함해야 한다.
+  // 종가만으로 범위를 잡으면 꼬리가 차트 밖으로 삐져나간다.
+  const min = Math.min(...lows);
+  const max = Math.max(...highs);
+  const pad = (max - min) * 0.1 || 1;
   const lo = min - pad;
   const hi = max + pad;
 
-  const X = (i: number) => (span === 1 ? 0 : (i / (span - 1)) * VIEW_W);
+  const X = (i: number) => (span === 1 ? VIEW_W / 2 : (i / (span - 1)) * VIEW_W);
   const Y = (v: number) => VIEW_H - ((v - lo) / (hi - lo)) * VIEW_H;
+  const toPctX = (x: number) => (x / VIEW_W) * 100;
+  const toPctY = (y: number) => (y / VIEW_H) * 100;
 
-  const points = values.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
+  const points = closes.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
 
-  const step = Math.max(1, Math.floor((span - 1) / 4));
-  const labelIndices = [0, step, step * 2, step * 3, span - 1].filter(
-    (v, i, arr) => arr.indexOf(v) === i && v < span
-  );
+  // x축 라벨 — 기간이 짧으면 개수를 줄여 겹치지 않게 한다
+  const labelCount = span <= 6 ? span : 5;
+  const labelIndices = Array.from({ length: labelCount }, (_, k) =>
+    labelCount === 1 ? 0 : Math.round((k * (span - 1)) / (labelCount - 1))
+  ).filter((v, i, arr) => arr.indexOf(v) === i);
+
+  // y축 눈금 5개 — 값이 2개뿐이면 중간 수준을 읽을 수 없다
+  const TICK_COUNT = 5;
+  const yTicks = Array.from({ length: TICK_COUNT }, (_, k) => {
+    const value = hi - ((hi - lo) * k) / (TICK_COUNT - 1);
+    return { value, yPct: toPctY(Y(value)) };
+  });
+
+  const maxVolume = Math.max(...volumes, 1);
 
   return {
     linePoints: points.join(' '),
     areaPoints: `0,${VIEW_H} ${points.join(' ')} ${VIEW_W},${VIEW_H}`,
-    rising: values[values.length - 1] >= values[0],
+    rising: closes[closes.length - 1] >= closes[0],
     yMax: hi,
     yMin: lo,
+    span,
+    yTicks,
     xLabels: labelIndices.map(i => {
       const d = dateFor(span - 1 - i);
       return `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
     }),
+    candles: closes.map((close, i) => {
+      const open = opens[i];
+      const top = Math.max(open, close);
+      const bottom = Math.min(open, close);
+      const topPct = toPctY(Y(top));
+      const bottomPct = toPctY(Y(bottom));
+      return {
+        daysAgo: span - 1 - i,
+        xPct: toPctX(X(i)),
+        bodyTopPct: topPct,
+        // 시가와 종가가 같으면 높이가 0이 되어 보이지 않으므로 최소 두께를 준다
+        bodyHeightPct: Math.max(bottomPct - topPct, 0.35),
+        highPct: toPctY(Y(highs[i])),
+        lowPct: toPctY(Y(lows[i])),
+        rising: close >= open,
+      };
+    }),
+    volumes: volumes.map((v, i) => ({
+      daysAgo: span - 1 - i,
+      xPct: toPctX(X(i)),
+      heightPct: (v / maxVolume) * 100,
+      rising: closes[i] >= opens[i],
+    })),
     positionFor: (daysAgo: number) => {
       const i = span - 1 - daysAgo;
-      if (i < 0 || i >= values.length) return null;
-      return { xPct: (X(i) / VIEW_W) * 100, yPct: (Y(values[i]) / VIEW_H) * 100 };
+      if (i < 0 || i >= closes.length) return null;
+      return { xPct: toPctX(X(i)), yPct: toPctY(Y(closes[i])) };
+    },
+    nearestDay: (xPct: number) => {
+      if (span === 0) return null;
+      const i = Math.round((xPct / 100) * (span - 1));
+      const clamped = Math.max(0, Math.min(span - 1, i));
+      return span - 1 - clamped;
     },
   };
 }

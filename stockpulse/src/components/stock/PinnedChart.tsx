@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState, useRef, useEffect } from 'react';
-import { c } from '@/lib/tokens';
-import { chartGeometry, dateFor } from '@/lib/price-data';
+import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { c, font } from '@/lib/tokens';
+import { chartGeometry, dateFor, dayQuote } from '@/lib/price-data';
 import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
 import { pct, won, shortDate } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
@@ -15,14 +15,18 @@ interface PinnedChartProps {
   onSelect: (tradingDate: string) => void;
 }
 
-/** 차트 높이는 CSS로 고정돼 있어 그대로 쓸 수 있다 */
-const CHART_PX_HEIGHT = 296;
-/** 핀 사이 최소 여백 (px) — 시각적으로 분리돼 보이려면 여유가 필요하다 */
+/** 가격 영역 높이 (px) */
+const PRICE_H = 268;
+/** 거래량 영역 높이 (px) */
+const VOLUME_H = 46;
+/** 핀 사이 최소 여백 (px) */
 const PIN_GAP_PX = 7;
 /** 겹칠 때 한 번에 밀어올리는 세로 간격 (%) */
 const PIN_STEP_PCT = 12;
 /** 폭을 측정하기 전 SSR 단계에서 쓸 기본값 */
 const FALLBACK_WIDTH = 800;
+
+export type ChartMode = 'line' | 'candle';
 
 export default function PinnedChart({
   ticker,
@@ -33,12 +37,14 @@ export default function PinnedChart({
 }: PinnedChartProps) {
   const { colors } = useConvention();
   const [hoveredDate, setHoveredDate] = useState<string | null>(null);
+  const [mode, setMode] = useState<ChartMode>('line');
+  /** 크로스헤어가 가리키는 거래일 (마우스 위치 기반) */
+  const [cursorDay, setCursorDay] = useState<number | null>(null);
 
   /**
    * 핀 겹침 계산에는 차트의 **실제 렌더 폭**이 필요하다.
-   * SVG viewBox(1000)를 그대로 쓰면 안 된다 — 핀 크기는 CSS px이고
+   * SVG viewBox를 그대로 쓰면 안 된다 — 핀 크기는 CSS px이고
    * 컨테이너 폭은 반응형이라 viewBox 좌표와 배율이 다르다.
-   * 이 불일치 때문에 겹침 판정이 실제보다 느슨해진다.
    */
   const plotRef = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(FALLBACK_WIDTH);
@@ -48,7 +54,6 @@ export default function PinnedChart({
     if (!el) return;
 
     setChartWidth(el.clientWidth || FALLBACK_WIDTH);
-
     const observer = new ResizeObserver(entries => {
       const width = entries[0]?.contentRect.width;
       if (width) setChartWidth(width);
@@ -59,26 +64,13 @@ export default function PinnedChart({
 
   const geo = useMemo(() => chartGeometry(ticker, periodDays), [ticker, periodDays]);
 
-  /**
-   * 핀 배치를 계산한다.
-   *
-   * 두 가지 보정이 필요하다:
-   *
-   * 1. 경계 클리핑 — x가 0%/100%에 가까우면 translate(-50%)로 인해 핀의 절반이
-   *    차트 밖으로 잘린다. 지름의 절반만큼 안쪽으로 민다.
-   *
-   * 2. 겹침 — 최근 거래일이 연속으로 핀이 되면(예: 8/24·8/25·8/26) 서로 붙어
-   *    번호를 읽을 수 없다. 가로로 가까운 핀을 감지해 세로로 계단식 오프셋을 준다.
-   */
-  const layout = useMemo(() => {
-    const placed: {
-      pin: NewsPin;
-      size: number;
-      leftPct: number;
-      topPct: number;
-    }[] = [];
+  // 기간이 길면 캔들이 1px 미만으로 얇아져 의미가 없다
+  const candleWidth = Math.max(1.5, Math.min(11, (chartWidth / geo.span) * 0.62));
 
-    // 가로 순서대로 처리해야 겹침 판정이 일관된다
+  /** 핀 배치 — 경계 클리핑과 겹침을 보정한다 */
+  const layout = useMemo(() => {
+    const placed: { pin: NewsPin; size: number; leftPct: number; topPct: number }[] = [];
+
     const ordered = [...pins]
       .map(pin => ({ pin, pos: geo.positionFor(pin.daysAgo) }))
       .filter((x): x is { pin: NewsPin; pos: { xPct: number; yPct: number } } => x.pos !== null)
@@ -86,38 +78,23 @@ export default function PinnedChart({
 
     for (const { pin, pos } of ordered) {
       const size = newsPinDiameter(pin.articles.length);
-
-      // 실제 렌더 폭 기준으로 핀 반지름을 %로 환산해 경계 안쪽에 붙인다
       const halfPct = (size / 2 / chartWidth) * 100;
       const leftPct = Math.max(halfPct, Math.min(100 - halfPct, pos.xPct));
 
-      // 이미 배치된 핀과 가로로 겹치는지 확인
       let topPct = pos.yPct;
       let guard = 0;
       while (guard < 8) {
         const collides = placed.some(other => {
-          const dx = Math.abs(other.leftPct - leftPct);
-          const dy = Math.abs(other.topPct - topPct);
-          // % 단위 거리를 실제 px로 환산해 두 핀의 반지름 합과 비교
-          const dxPx = (dx / 100) * chartWidth;
-          const dyPx = (dy / 100) * CHART_PX_HEIGHT;
-          const minDist = (other.size + size) / 2 + PIN_GAP_PX;
-          return Math.hypot(dxPx, dyPx) < minDist;
+          const dxPx = (Math.abs(other.leftPct - leftPct) / 100) * chartWidth;
+          const dyPx = (Math.abs(other.topPct - topPct) / 100) * PRICE_H;
+          return Math.hypot(dxPx, dyPx) < (other.size + size) / 2 + PIN_GAP_PX;
         });
-
         if (!collides) break;
-
-        // 위로 밀어올린다. 상단에 닿으면 아래로 방향을 바꾼다.
         topPct = topPct > 18 ? topPct - PIN_STEP_PCT : topPct + PIN_STEP_PCT;
         guard++;
       }
 
-      placed.push({
-        pin,
-        size,
-        leftPct,
-        topPct: Math.max(6, Math.min(94, topPct)),
-      });
+      placed.push({ pin, size, leftPct, topPct: Math.max(6, Math.min(94, topPct)) });
     }
 
     return placed;
@@ -127,60 +104,228 @@ export default function PinnedChart({
   const hoveredEntry = layout.find(l => l.pin.tradingDate === hoveredDate) ?? null;
   const hovered = hoveredEntry?.pin ?? null;
 
+  /** 마우스 x 위치 → 가장 가까운 거래일 */
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+      setCursorDay(geo.nearestDay(xPct));
+    },
+    [geo]
+  );
+
+  const cursorQuote = cursorDay !== null ? dayQuote(ticker, cursorDay) : null;
+  const cursorPos = cursorDay !== null ? geo.positionFor(cursorDay) : null;
+  // 핀에 마우스를 올린 동안에는 핀 툴팁을 우선한다
+  const showCrosshair = cursorQuote && cursorPos && !hovered;
+
   return (
-    <div style={{ padding: '20px 26px 8px' }}>
-      <div ref={plotRef} style={{ position: 'relative', height: 296 }}>
-        {/* 가로 그리드 — 눈금이 아니라 읽기 보조선이므로 점선으로 약하게 */}
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-          }}
-        >
-          <div style={{ borderTop: `1px dashed ${c.grid}` }} />
-          <div style={{ borderTop: `1px dashed ${c.grid}` }} />
-          <div style={{ borderTop: `1px dashed ${c.grid}` }} />
-          <div style={{ borderTop: `1px solid ${c.border}` }} />
+    <div style={{ padding: '16px 26px 8px' }}>
+      {/* 표시 방식 토글 + 커서 시세 요약 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          marginBottom: 12,
+          flexWrap: 'wrap',
+          minHeight: 30,
+        }}
+      >
+        <div style={{ display: 'flex', border: `1px solid ${c.border}`, borderRadius: 3, overflow: 'hidden' }}>
+          {(['line', 'candle'] as ChartMode[]).map(m => {
+            const active = mode === m;
+            return (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: active ? 700 : 500,
+                  padding: '5px 11px',
+                  background: active ? c.ink : 'transparent',
+                  color: active ? c.surface : c.inkSoft,
+                  border: 0,
+                  cursor: 'pointer',
+                }}
+              >
+                {m === 'line' ? '선' : '캔들'}
+              </button>
+            );
+          })}
         </div>
+
+        {/* 마우스가 가리키는 날의 시세 — 차트 위에서 바로 읽힌다 */}
+        {cursorQuote ? (
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', fontSize: 11.5 }}>
+            <span style={{ fontWeight: 700, color: c.ink }}>
+              {shortDate(dateFor(cursorQuote.daysAgo))}
+            </span>
+            <QuoteField label="시" value={cursorQuote.open} />
+            <QuoteField label="고" value={cursorQuote.high} />
+            <QuoteField label="저" value={cursorQuote.low} />
+            <QuoteField label="종" value={cursorQuote.close} strong />
+            <span
+              style={{
+                fontWeight: 700,
+                color: cursorQuote.changeRate >= 0 ? colors.up : colors.down,
+              }}
+            >
+              {pct(cursorQuote.changeRate)}
+            </span>
+            <span style={{ color: c.inkFaint }}>
+              거래량 {cursorQuote.volume.toLocaleString('ko-KR')}
+            </span>
+          </div>
+        ) : (
+          <span style={{ fontSize: 11.5, color: c.inkFaint }}>
+            차트에 마우스를 올리면 그날의 시세가 표시됩니다
+          </span>
+        )}
+      </div>
+
+      {/* 가격 영역 */}
+      <div
+        ref={plotRef}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setCursorDay(null)}
+        style={{ position: 'relative', height: PRICE_H }}
+      >
+        {/* y축 눈금선 */}
+        {geo.yTicks.map((tick, i) => (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: `${tick.yPct}%`,
+              borderTop:
+                i === geo.yTicks.length - 1 ? `1px solid ${c.border}` : `1px dashed ${c.grid}`,
+            }}
+          />
+        ))}
 
         <svg
           viewBox="0 0 1000 296"
           preserveAspectRatio="none"
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}
         >
-          <polygon points={geo.areaPoints} fill={`${lineColor}14`} />
-          <polyline
-            points={geo.linePoints}
-            fill="none"
-            stroke={lineColor}
-            strokeWidth="1.8"
-            vectorEffect="non-scaling-stroke"
-          />
+          {mode === 'line' && (
+            <>
+              <polygon points={geo.areaPoints} fill={`${lineColor}14`} />
+              <polyline
+                points={geo.linePoints}
+                fill="none"
+                stroke={lineColor}
+                strokeWidth="1.8"
+                vectorEffect="non-scaling-stroke"
+              />
+            </>
+          )}
         </svg>
 
-        {/* y축 상·하단 값만 표기 — 촘촘한 눈금은 읽기를 방해한다 */}
-        <div style={{ position: 'absolute', left: 6, top: -2, fontSize: 10.5, color: c.inkFaint }}>
-          {won(geo.yMax)}
-        </div>
-        <div style={{ position: 'absolute', left: 6, bottom: 4, fontSize: 10.5, color: c.inkFaint }}>
-          {won(geo.yMin)}
-        </div>
+        {/* 캔들 — SVG가 아니라 div로 그린다. viewBox 스케일링이 캔들 폭을 왜곡하기 때문 */}
+        {mode === 'candle' &&
+          geo.candles.map(candle => {
+            const color = candle.rising ? colors.up : colors.down;
+            return (
+              <div key={candle.daysAgo}>
+                {/* 고가~저가 꼬리 */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${candle.xPct}%`,
+                    top: `${candle.highPct}%`,
+                    height: `${candle.lowPct - candle.highPct}%`,
+                    width: 1,
+                    marginLeft: -0.5,
+                    background: color,
+                    opacity: 0.75,
+                  }}
+                />
+                {/* 시가~종가 몸통 */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${candle.xPct}%`,
+                    top: `${candle.bodyTopPct}%`,
+                    height: `${candle.bodyHeightPct}%`,
+                    width: candleWidth,
+                    marginLeft: -candleWidth / 2,
+                    background: color,
+                    borderRadius: candleWidth > 4 ? 1 : 0,
+                  }}
+                />
+              </div>
+            );
+          })}
 
-        {/* 뉴스 핀 — 원래 데이터 지점과 어긋난 경우 연결선을 함께 그린다 */}
+        {/* 크로스헤어 */}
+        {showCrosshair && (
+          <>
+            <div
+              style={{
+                position: 'absolute',
+                left: `${cursorPos.xPct}%`,
+                top: 0,
+                bottom: 0,
+                width: 1,
+                background: c.inkSoft,
+                opacity: 0.45,
+                pointerEvents: 'none',
+                zIndex: 2,
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                left: `${cursorPos.xPct}%`,
+                top: `${cursorPos.yPct}%`,
+                transform: 'translate(-50%, -50%)',
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: c.surface,
+                border: `2px solid ${c.ink}`,
+                pointerEvents: 'none',
+                zIndex: 3,
+              }}
+            />
+          </>
+        )}
+
+        {/* y축 값 라벨 */}
+        {geo.yTicks.map((tick, i) => (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: 4,
+              top: `${tick.yPct}%`,
+              transform: i === 0 ? 'translateY(0)' : 'translateY(-50%)',
+              fontSize: 10,
+              color: c.inkFaint,
+              background: `${c.surface}d9`,
+              padding: '0 3px',
+              pointerEvents: 'none',
+            }}
+          >
+            {won(tick.value)}
+          </div>
+        ))}
+
+        {/* 뉴스 핀 */}
         {layout.map(({ pin, size, leftPct, topPct }) => {
           const original = geo.positionFor(pin.daysAgo);
           const active = selectedDate === pin.tradingDate || hoveredDate === pin.tradingDate;
           const fill = pin.changeRate >= 0 ? colors.up : colors.down;
-
-          // 겹침 회피로 핀이 밀려났으면, 실제 데이터 지점을 점으로 표시해 혼동을 막는다
           const offset = original ? Math.abs(original.yPct - topPct) : 0;
           const shifted = offset > 1;
 
           return (
             <div key={pin.tradingDate}>
+              {/* 겹침 회피로 밀려났으면 실제 데이터 지점을 표시해 혼동을 막는다 */}
               {shifted && original && (
                 <>
                   <div
@@ -245,14 +390,14 @@ export default function PinnedChart({
           );
         })}
 
-        {/* 호버 툴팁 — 오른쪽 끝 핀은 왼쪽으로 펼친다 */}
+        {/* 핀 호버 툴팁 */}
         {hovered && hoveredEntry && (
           <div
             style={{
               position: 'absolute',
               left: hoveredEntry.leftPct > 62 ? 'auto' : `${hoveredEntry.leftPct}%`,
               right: hoveredEntry.leftPct > 62 ? `${100 - hoveredEntry.leftPct}%` : 'auto',
-              top: `${Math.min(hoveredEntry.topPct, 55)}%`,
+              top: `${Math.min(hoveredEntry.topPct, 52)}%`,
               marginTop: 18,
               width: 280,
               background: c.surface,
@@ -290,7 +435,6 @@ export default function PinnedChart({
               </span>
             </div>
 
-            {/* 그 날의 대표 기사 최대 3건 */}
             {hovered.articles.slice(0, 3).map(a => (
               <div
                 key={a.id}
@@ -314,8 +458,52 @@ export default function PinnedChart({
         )}
       </div>
 
+      {/* 거래량 */}
+      <div
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setCursorDay(null)}
+        style={{
+          position: 'relative',
+          height: VOLUME_H,
+          marginTop: 6,
+          borderTop: `1px solid ${c.borderSoft}`,
+          paddingTop: 4,
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            left: 4,
+            top: 5,
+            fontSize: 9.5,
+            color: c.inkFaint,
+            pointerEvents: 'none',
+          }}
+        >
+          거래량
+        </div>
+        {geo.volumes.map(v => {
+          const isCursor = cursorDay === v.daysAgo;
+          return (
+            <div
+              key={v.daysAgo}
+              style={{
+                position: 'absolute',
+                left: `${v.xPct}%`,
+                bottom: 0,
+                height: `${v.heightPct}%`,
+                width: candleWidth,
+                marginLeft: -candleWidth / 2,
+                background: v.rising ? colors.up : colors.down,
+                opacity: isCursor ? 0.95 : 0.3,
+              }}
+            />
+          );
+        })}
+      </div>
+
       {/* x축 라벨 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8 }}>
         {geo.xLabels.map((label, i) => (
           <span key={`${label}-${i}`} style={{ fontSize: 10.5, color: c.inkFaint }}>
             {label}
@@ -331,7 +519,7 @@ export default function PinnedChart({
           gap: 16,
           padding: '14px 0 6px',
           borderTop: `1px solid ${c.borderSoft}`,
-          marginTop: 12,
+          marginTop: 10,
           flexWrap: 'wrap',
         }}
       >
@@ -343,5 +531,16 @@ export default function PinnedChart({
         </span>
       </div>
     </div>
+  );
+}
+
+function QuoteField({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
+  return (
+    <span style={{ color: c.inkMid }}>
+      <span style={{ color: c.inkFaint }}>{label} </span>
+      <span style={{ fontWeight: strong ? 700 : 500, color: strong ? c.ink : c.inkStrong }}>
+        {won(value)}
+      </span>
+    </span>
   );
 }

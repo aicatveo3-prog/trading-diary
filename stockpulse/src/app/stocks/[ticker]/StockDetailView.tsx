@@ -31,8 +31,10 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
   const sentiment = sentimentSummary(ticker);
   const allArticles = newsFor(ticker);
 
+  // '전체'는 큰 값을 두었으므로 보유 데이터 길이로 잘라낸다
   const available = closeSeries(ticker).length;
   const periodDays = Math.min(PERIODS.find(p => p.key === period)?.days ?? 22, available);
+  const periodLabel = PERIODS.find(p => p.key === period)?.label ?? '';
 
   // 뉴스를 거래일 축에 매핑하고 핀을 선정한다
   const { pins, allGroups, pending } = useMemo(
@@ -95,8 +97,8 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
             }}
           >
             <div style={{ fontSize: 12.5, color: c.inkMid }}>
-              이 기간에 꽂힌 뉴스 핀 <strong style={{ color: c.ink }}>{pins.length}개</strong>
-              {' · '}뉴스가 난 날 {allGroups.length}일
+              최근 {periodLabel} · 거래일 {periodDays}일
+              {' · '}뉴스 핀 <strong style={{ color: c.ink }}>{pins.length}개</strong>
             </div>
             <PeriodSelector selected={period} onChange={setPeriod} />
           </div>

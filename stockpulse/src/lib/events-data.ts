@@ -218,11 +218,20 @@ export function eventsFor(ticker: string): StockEvent[] {
   return STOCK_EVENTS.filter(e => e.ticker === ticker);
 }
 
-/** 기간 옵션 — days는 거래일 수 */
+/**
+ * 기간 옵션
+ *
+ * days는 거래일 수다. 달력일이 아니라 거래일이라 1개월이 22일이다.
+ * label은 한글로 둔다 — '1M'은 무슨 뜻인지 바로 읽히지 않는다.
+ * '전체'는 보유한 데이터를 모두 쓰도록 큰 값을 두고 호출부에서 clamp한다.
+ */
 export const PERIODS = [
-  { key: '1M' as const, days: 22 },
-  { key: '3M' as const, days: 64 },
-  { key: '1Y' as const, days: 250 },
+  { key: '1W' as const, label: '1주', days: 5 },
+  { key: '1M' as const, label: '1개월', days: 22 },
+  { key: '3M' as const, label: '3개월', days: 64 },
+  { key: '6M' as const, label: '6개월', days: 125 },
+  { key: '1Y' as const, label: '1년', days: 250 },
+  { key: 'ALL' as const, label: '전체', days: 99999 },
 ];
 
 export type PeriodKey = (typeof PERIODS)[number]['key'];
