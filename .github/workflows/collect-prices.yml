@@ -1,4 +1,4 @@
-name: Collect Prices
+name: Collect Data
 
 on:
   schedule:
@@ -42,6 +42,9 @@ jobs:
       - name: 정합성 검증
         run: python scripts/verify_consistency.py
 
+      - name: 뉴스 수집
+        run: python scripts/collect_news.py
+
       - name: 변경 사항 커밋
         id: commit
         run: |
@@ -55,9 +58,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           TRADING_DATE=$(python -c "import json;print(json.load(open('src/data/prices.json'))['tradingDate'])")
+          NEWS_COUNT=$(python -c "import json;d=json.load(open('src/data/news.json'));print(sum(len(v) for v in d['stocks'].values()))")
 
           git add src/data
-          git commit -m "chore(data): 주가 갱신 — 기준일 ${TRADING_DATE}"
+          git commit -m "chore(data): 주가·뉴스 갱신 — 기준일 ${TRADING_DATE}, 뉴스 ${NEWS_COUNT}건"
           git push
 
           echo "changed=true" >> "$GITHUB_OUTPUT"
