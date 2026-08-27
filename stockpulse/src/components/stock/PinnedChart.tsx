@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { c } from '@/lib/tokens';
 import { chartGeometry, dateFor } from '@/lib/price-data';
 import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
@@ -15,13 +15,14 @@ interface PinnedChartProps {
   onSelect: (tradingDate: string) => void;
 }
 
-/** SVG viewBox 기준 폭·높이. 핀 겹침 계산에서 % ↔ px 환산에 쓴다. */
-const CHART_PX_WIDTH = 1000;
+/** 차트 높이는 CSS로 고정돼 있어 그대로 쓸 수 있다 */
 const CHART_PX_HEIGHT = 296;
-/** 핀 사이 최소 여백 (px) */
-const PIN_GAP_PX = 4;
+/** 핀 사이 최소 여백 (px) — 시각적으로 분리돼 보이려면 여유가 필요하다 */
+const PIN_GAP_PX = 7;
 /** 겹칠 때 한 번에 밀어올리는 세로 간격 (%) */
-const PIN_STEP_PCT = 11;
+const PIN_STEP_PCT = 12;
+/** 폭을 측정하기 전 SSR 단계에서 쓸 기본값 */
+const FALLBACK_WIDTH = 800;
 
 export default function PinnedChart({
   ticker,
@@ -32,6 +33,29 @@ export default function PinnedChart({
 }: PinnedChartProps) {
   const { colors } = useConvention();
   const [hoveredDate, setHoveredDate] = useState<string | null>(null);
+
+  /**
+   * 핀 겹침 계산에는 차트의 **실제 렌더 폭**이 필요하다.
+   * SVG viewBox(1000)를 그대로 쓰면 안 된다 — 핀 크기는 CSS px이고
+   * 컨테이너 폭은 반응형이라 viewBox 좌표와 배율이 다르다.
+   * 이 불일치 때문에 겹침 판정이 실제보다 느슨해진다.
+   */
+  const plotRef = useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = useState(FALLBACK_WIDTH);
+
+  useEffect(() => {
+    const el = plotRef.current;
+    if (!el) return;
+
+    setChartWidth(el.clientWidth || FALLBACK_WIDTH);
+
+    const observer = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width;
+      if (width) setChartWidth(width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const geo = useMemo(() => chartGeometry(ticker, periodDays), [ticker, periodDays]);
 
@@ -63,8 +87,8 @@ export default function PinnedChart({
     for (const { pin, pos } of ordered) {
       const size = newsPinDiameter(pin.articles.length);
 
-      // 차트 폭 기준 핀 반지름을 %로 환산 (컨테이너 폭을 모르므로 1000 기준 근사)
-      const halfPct = (size / 2 / CHART_PX_WIDTH) * 100;
+      // 실제 렌더 폭 기준으로 핀 반지름을 %로 환산해 경계 안쪽에 붙인다
+      const halfPct = (size / 2 / chartWidth) * 100;
       const leftPct = Math.max(halfPct, Math.min(100 - halfPct, pos.xPct));
 
       // 이미 배치된 핀과 가로로 겹치는지 확인
@@ -74,8 +98,8 @@ export default function PinnedChart({
         const collides = placed.some(other => {
           const dx = Math.abs(other.leftPct - leftPct);
           const dy = Math.abs(other.topPct - topPct);
-          // % 단위 거리를 px로 환산해 두 핀의 반지름 합과 비교
-          const dxPx = (dx / 100) * CHART_PX_WIDTH;
+          // % 단위 거리를 실제 px로 환산해 두 핀의 반지름 합과 비교
+          const dxPx = (dx / 100) * chartWidth;
           const dyPx = (dy / 100) * CHART_PX_HEIGHT;
           const minDist = (other.size + size) / 2 + PIN_GAP_PX;
           return Math.hypot(dxPx, dyPx) < minDist;
@@ -97,7 +121,7 @@ export default function PinnedChart({
     }
 
     return placed;
-  }, [pins, geo]);
+  }, [pins, geo, chartWidth]);
 
   const lineColor = geo.rising ? colors.up : colors.down;
   const hoveredEntry = layout.find(l => l.pin.tradingDate === hoveredDate) ?? null;
@@ -105,7 +129,7 @@ export default function PinnedChart({
 
   return (
     <div style={{ padding: '20px 26px 8px' }}>
-      <div style={{ position: 'relative', height: 296 }}>
+      <div ref={plotRef} style={{ position: 'relative', height: 296 }}>
         {/* 가로 그리드 — 눈금이 아니라 읽기 보조선이므로 점선으로 약하게 */}
         <div
           style={{
