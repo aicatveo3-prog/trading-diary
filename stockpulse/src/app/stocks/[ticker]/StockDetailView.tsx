@@ -15,6 +15,7 @@ import PinnedChart from '@/components/stock/PinnedChart';
 import IntradayChart from '@/components/stock/IntradayChart';
 import GroupedNewsTimeline from '@/components/news/GroupedNewsTimeline';
 import PromiseCard from '@/components/panels/PromiseCard';
+import DataFreshness from '@/components/layout/DataFreshness';
 
 /** 차트에 꽂을 핀 개수 상한 — 이보다 많으면 차트가 읽히지 않는다 */
 const MAX_PINS = 5;
@@ -115,6 +116,7 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
                   {' · '}뉴스 핀 <strong style={{ color: c.ink }}>{pins.length}개</strong>
                 </>
               )}
+              <DataFreshness prefix=" · " />
             </div>
             <PeriodSelector selected={period} onChange={setPeriod} />
           </div>

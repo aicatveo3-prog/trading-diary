@@ -16,11 +16,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # 실패 시 이슈를 만들고 복구 시 닫기 위해 필요하다
+      issues: write
     outputs:
       changed: ${{ steps.commit.outputs.changed }}
     defaults:
       run:
         working-directory: stockpulse
+    env:
+      # 각 단계의 출력을 모아 실패 시 원인을 추출한다.
+      # 절대 경로여야 한다 — working-directory가 stockpulse로 바뀌기 때문이다.
+      PIPELINE_LOG: /tmp/pipeline.log
+      # 실패 이슈를 식별하는 라벨. 중복 생성을 막는 기준이 된다.
+      FAILURE_LABEL: data-pipeline-failure
 
     steps:
       - name: 저장소 체크아웃
@@ -37,26 +45,49 @@ jobs:
       - name: 의존성 설치
         run: pip install --quiet finance-datareader yfinance
 
+      # 아래 수집 단계들은 출력을 PIPELINE_LOG에 함께 기록한다.
+      # set -o pipefail이 없으면 tee의 종료 코드(항상 0)가 파이썬의 실패를
+      # 덮어써서, 스크립트가 죽어도 단계가 성공으로 처리된다.
+
       # 검증에 실패하면 스크립트가 종료 코드 1을 반환하고 파일을 쓰지 않는다.
       # 잘못된 데이터를 커밋하는 것보다 낡은 데이터를 유지하는 편이 낫다.
       - name: 주가 수집
-        run: python scripts/collect_prices.py
+        id: prices
+        shell: bash
+        run: |
+          set -eo pipefail
+          python scripts/collect_prices.py 2>&1 | tee -a "$PIPELINE_LOG"
 
       - name: 정합성 검증
-        run: python scripts/verify_consistency.py
+        id: verify
+        shell: bash
+        run: |
+          set -eo pipefail
+          python scripts/verify_consistency.py 2>&1 | tee -a "$PIPELINE_LOG"
 
       - name: 뉴스 수집
-        run: python scripts/collect_news.py
+        id: news
+        shell: bash
+        run: |
+          set -eo pipefail
+          python scripts/collect_news.py 2>&1 | tee -a "$PIPELINE_LOG"
 
       # Yahoo가 5분봉 60일·1시간봉 730일을 제공하므로 누적 병합이 필요 없다.
       # 매번 새로 받아 public/minutes/{종목}_{간격}.json 으로 분할 저장한다.
       # (분할 이유: 단일 파일은 번들에 박혀 모든 방문자가 전 종목 데이터를 받게 된다)
       - name: 분봉 수집
-        run: python scripts/collect_minutes.py
+        id: minutes
+        shell: bash
+        run: |
+          set -eo pipefail
+          python scripts/collect_minutes.py 2>&1 | tee -a "$PIPELINE_LOG"
 
       - name: 변경 사항 커밋
         id: commit
+        shell: bash
         run: |
+          set -eo pipefail
+
           # 분봉은 public/minutes/ 에 저장되므로 두 경로를 함께 확인한다
           if git diff --quiet -- src/data public/minutes && \
              [ -z "$(git ls-files --others --exclude-standard -- public/minutes)" ]; then
@@ -84,7 +115,208 @@ jobs:
           git push
 
           echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "trading_date=${TRADING_DATE}" >> "$GITHUB_OUTPUT"
+          echo "news_count=${NEWS_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "min_count=${MIN_COUNT}" >> "$GITHUB_OUTPUT"
           echo "커밋 완료 — 배포를 이어서 실행합니다"
+
+      # --- 관측성 ---
+      #
+      # 성공은 사람에게 알리지 않는다. 매일 알림을 받으면 습관화되어 정작
+      # 실패 알림까지 넘겨버린다. 대신 실행 페이지에 요약을 남겨
+      # 궁금할 때 확인할 수 있게 한다.
+      - name: 실행 요약 기록
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "### ✅ 데이터 수집 완료"
+            echo
+            if [ "${{ steps.commit.outputs.changed }}" = "true" ]; then
+              echo "| 항목 | 값 |"
+              echo "|---|---|"
+              echo "| 주가 기준일 | ${{ steps.commit.outputs.trading_date }} |"
+              echo "| 뉴스 | ${{ steps.commit.outputs.news_count }}건 |"
+              echo "| 분봉 | ${{ steps.commit.outputs.min_count }}개 |"
+              echo
+              echo "커밋했고 배포가 이어서 실행됩니다."
+            else
+              echo "데이터에 변경이 없어 커밋하지 않았습니다."
+              echo "휴장일이거나 이미 최신 상태입니다 — 정상입니다."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 실패하면 이슈를 만든다. GitHub이 이슈 생성 시 알림 메일을 보내므로
+      # 별도 알림 채널 없이도 통보가 된다.
+      #
+      # 같은 라벨의 열린 이슈가 이미 있으면 새로 만들지 않고 댓글을 단다.
+      # 매일 실패할 때 이슈가 쌓이면 그 자체가 노이즈가 되어 무시하게 된다.
+      - name: 실패 시 이슈 생성
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OUTCOME_PRICES: ${{ steps.prices.outcome }}
+          OUTCOME_VERIFY: ${{ steps.verify.outcome }}
+          OUTCOME_NEWS: ${{ steps.news.outcome }}
+          OUTCOME_MINUTES: ${{ steps.minutes.outcome }}
+          OUTCOME_COMMIT: ${{ steps.commit.outcome }}
+        run: |
+          set -uo pipefail
+
+          # 어느 단계에서 죽었는지 판별한다
+          FAILED_STEP="알 수 없음 (환경 설정 단계일 수 있습니다)"
+          IMPACT="데이터를 쓰지 않았습니다. 사이트는 이전 데이터를 유지합니다."
+          if   [ "$OUTCOME_PRICES"  = "failure" ]; then FAILED_STEP="주가 수집 (collect_prices.py)"
+          elif [ "$OUTCOME_VERIFY"  = "failure" ]; then FAILED_STEP="정합성 검증 (verify_consistency.py)"
+          elif [ "$OUTCOME_NEWS"    = "failure" ]; then FAILED_STEP="뉴스 수집 (collect_news.py)"
+          elif [ "$OUTCOME_MINUTES" = "failure" ]; then FAILED_STEP="분봉 수집 (collect_minutes.py)"
+          elif [ "$OUTCOME_COMMIT"  = "failure" ]; then
+            FAILED_STEP="변경 사항 커밋"
+            IMPACT="데이터는 수집됐지만 커밋에 실패했습니다. 다음 실행에서 다시 시도합니다."
+          fi
+
+          # 원인 한 줄을 뽑는다. 수집기들이 쓰는 실패 메시지 패턴을 찾는다.
+          ERROR_LINES=$(grep -hE "검증 실패|수집 실패|경고:|^  FAIL|Traceback|Error:" "$PIPELINE_LOG" 2>/dev/null | tail -6 || true)
+          [ -z "$ERROR_LINES" ] && ERROR_LINES="(로그에서 명시적 오류 메시지를 찾지 못했습니다)"
+          LOG_TAIL=$(tail -30 "$PIPELINE_LOG" 2>/dev/null || echo "(로그 없음)")
+
+          # 라벨을 미리 만든다 (이미 있으면 무시)
+          gh api -X POST "repos/$REPO/labels" \
+            -f name="$FAILURE_LABEL" \
+            -f color="d73a4a" \
+            -f description="데이터 수집 파이프라인 실패" >/dev/null 2>&1 || true
+
+          # 같은 라벨의 열린 이슈가 있으면 새로 만들지 않고 댓글을 단다
+          EXISTING=$(gh api "repos/$REPO/issues?state=open&labels=$FAILURE_LABEL&per_page=1" \
+            --jq '.[0].number // empty' 2>/dev/null || true)
+
+          TODAY=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST')
+
+          # 본문을 파이썬으로 JSON 인코딩한다.
+          # 로그에 따옴표·역슬래시·유니코드·중괄호가 섞여 있어 셸 문자열로
+          # 조립하면 깨진다. 값은 모두 환경 변수로 넘긴다.
+          export FAILED_STEP IMPACT ERROR_LINES LOG_TAIL TODAY EXISTING
+          python3 - <<'PY'
+          import json
+          import os
+
+          body = f"""**실패 단계**: {os.environ['FAILED_STEP']}
+
+          **영향**: {os.environ['IMPACT']}
+
+          ### 원인
+
+          ```
+          {os.environ['ERROR_LINES'].strip()}
+          ```
+
+          <details>
+          <summary>로그 마지막 30줄</summary>
+
+          ```
+          {os.environ['LOG_TAIL'].strip()}
+          ```
+
+          </details>
+
+          ### 확인할 것
+
+          - 실행 로그: {os.environ.get('RUN_URL', '')}
+          - 데이터 소스(FDR·Yahoo·Google News)는 API 키가 없어 가용성 보장이 없습니다.
+            형식 변경이나 일시적 오류로 실패할 수 있습니다.
+          - 검증 단계에서 멈췄다면 데이터가 깨진 것이며, 커밋을 막은 것은 의도된 동작입니다.
+
+          이 이슈는 다음 실행이 성공하면 자동으로 닫힙니다.
+          """
+
+          today = os.environ['TODAY']
+
+          if os.environ.get('EXISTING'):
+              payload = {"body": f"### 🔴 재발 — {today}\n\n{body}"}
+          else:
+              payload = {
+                  "title": f"🔴 데이터 수집 실패 — {today}",
+                  "body": body,
+                  "labels": [os.environ['FAILURE_LABEL']],
+              }
+
+          with open('/tmp/payload.json', 'w', encoding='utf-8') as f:
+              json.dump(payload, f, ensure_ascii=False)
+          PY
+
+          if [ -n "$EXISTING" ]; then
+            gh api -X POST "repos/$REPO/issues/$EXISTING/comments" \
+              --input /tmp/payload.json >/dev/null
+            echo "기존 이슈 #$EXISTING 에 댓글 추가 (중복 생성 방지)"
+          else
+            NUM=$(gh api -X POST "repos/$REPO/issues" --input /tmp/payload.json --jq '.number')
+            echo "이슈 #$NUM 생성 완료"
+          fi
+
+          # 실행 페이지 요약에도 남긴다
+          {
+            echo "### 🔴 데이터 수집 실패"
+            echo
+            echo "**실패 단계**: $FAILED_STEP"
+            echo
+            echo '```'
+            echo "$ERROR_LINES"
+            echo '```'
+            echo
+            echo "이슈가 생성되어 알림이 발송됩니다."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 이전에 실패해 열린 이슈가 있으면 닫는다.
+      # 이게 없으면 실패 알림을 받은 뒤 "아직도 고장인가?"를 계속 수동 확인해야 한다.
+      - name: 복구 시 이슈 닫기
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          OPEN=$(gh api "repos/$REPO/issues?state=open&labels=$FAILURE_LABEL&per_page=20" \
+            --jq '.[].number' 2>/dev/null || true)
+
+          if [ -z "$OPEN" ]; then
+            echo "열린 실패 이슈가 없습니다 — 닫을 것이 없습니다"
+            exit 0
+          fi
+
+          TODAY=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST')
+          export TODAY
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          body = f"""✅ **복구됨** — {os.environ['TODAY']}
+
+          수집 파이프라인이 정상적으로 완료되어 이 이슈를 닫습니다.
+
+          - 실행 로그: {os.environ['RUN_URL']}
+          """
+
+          with open('/tmp/recover.json', 'w', encoding='utf-8') as f:
+              json.dump({"body": body}, f, ensure_ascii=False)
+          PY
+
+          for NUM in $OPEN; do
+            gh api -X POST "repos/$REPO/issues/$NUM/comments" --input /tmp/recover.json >/dev/null
+            gh api -X PATCH "repos/$REPO/issues/$NUM" \
+              -f state=closed -f state_reason=completed >/dev/null
+            echo "이슈 #$NUM 닫음 (복구)"
+          done
+
+          echo "### ♻️ 파이프라인 복구" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "이전 실패 이슈를 닫았습니다." >> "$GITHUB_STEP_SUMMARY"
 
   # 데이터가 실제로 바뀐 경우에만 재배포한다.
   # GITHUB_TOKEN으로 push한 커밋은 push 이벤트를 트리거하지 않으므로

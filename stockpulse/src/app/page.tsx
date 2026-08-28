@@ -17,6 +17,7 @@ import { entryFor, formatPrice, groupedEntries } from '@/lib/universe';
 import { useConvention } from '@/lib/convention-context';
 import MarketIndexStrip from '@/components/panels/MarketIndexStrip';
 import PromiseCard from '@/components/panels/PromiseCard';
+import DataFreshness from '@/components/layout/DataFreshness';
 
 /**
  * 워치리스트 기본값 — 실 데이터 연결 시 /api/watchlist에서 조회.
@@ -53,6 +54,11 @@ export default function DashboardPage() {
           </h1>
           <p style={{ margin: 0, fontSize: 12.5, color: c.inkMid }}>
             {longDate(asOfDate)} 장마감 기준
+            {/*
+              거래일과 수집 시각은 다르다. 휴장일에는 거래일이 안 바뀌어도
+              수집은 매일 돌아야 정상이므로, 둘을 함께 보여준다.
+            */}
+            <DataFreshness prefix=" · " />
           </p>
         </div>
 

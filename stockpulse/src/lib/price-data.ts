@@ -85,6 +85,20 @@ export function tradingDate(ticker?: string): string {
   return marketData(ticker).tradingDate;
 }
 
+/**
+ * 수집기가 이 데이터를 마지막으로 기록한 시각 (ISO 8601, KST).
+ *
+ * tradingDate와 다른 것을 나타낸다:
+ *   tradingDate  = 어느 장마감 데이터인가 (휴장일에는 안 바뀐다)
+ *   collectedAt  = 파이프라인이 마지막으로 돌아간 시각
+ *
+ * 후자가 며칠째 그대로면 자동 수집이 멈춘 것이다. 화면에 노출해야
+ * 사이트만 보고도 정지를 알아챌 수 있다.
+ */
+export function collectedAt(): string {
+  return prices.collectedAt;
+}
+
 export function availableTickers(): string[] {
   return Object.keys(stocksRaw);
 }
