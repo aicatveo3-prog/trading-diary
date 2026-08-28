@@ -16,9 +16,10 @@
 | 폰트 | Noto Serif KR (제목·숫자) / Noto Sans KR (본문) | `next/font` |
 | 데이터 | 저장소에 커밋된 JSON | DB·API 서버 없음 |
 
-`supabase/`와 `src/app/api/`는 이전 설계의 잔존물입니다. 현재 화면은 이들을
-호출하지 않고 로컬 JSON만 읽습니다. Pages 빌드 시 `src/app/api`는 제외됩니다
-(서버 런타임이 없어 Route Handler를 실행할 수 없음).
+서버가 없다. 화면은 빌드에 포함된 JSON(`prices`·`news`·`universe`·`stocks`)과
+런타임 fetch하는 분봉(`public/minutes/`)만 읽는다. 이전에 있던 Supabase·API
+라우트·네이버 수집기·Vercel Cron은 모두 제거하고, Python 수집기 + GitHub
+Actions + 커밋된 JSON 구조로 대체했다.
 
 ---
 
@@ -114,8 +115,7 @@ stockpulse/
     ├── app/
     │   ├── page.tsx               대시보드
     │   ├── watchlist/page.tsx     워치리스트
-    │   ├── stocks/[ticker]/       종목 상세 (generateStaticParams로 30페이지)
-    │   └── api/                   ← 현재 미사용, Pages 빌드에서 제외
+    │   └── stocks/[ticker]/       종목 상세 (generateStaticParams로 30페이지)
     ├── components/
     │   ├── layout/
     │   │   ├── SiteHeader.tsx     로고·검색·KR/US 토글
@@ -135,20 +135,17 @@ stockpulse/
         ├── minute-data.ts         분봉 fetch + 집계
         ├── news-data.ts           뉴스 접근
         ├── news-pins.ts           뉴스 → 거래일 매핑 + 핀 선정
-        ├── events-data.ts         PERIODS 정의
+        ├── periods.ts             차트 기간 정의 (PERIODS)
+        ├── today-moves.ts         등락률 순위 (대시보드)
         ├── tokens.ts              색 팔레트
         └── convention-context.tsx KR/US 색 관설 상태
 ```
 
-### 정리 대상
+### 남은 개선 여지
 
-아래는 예시 데이터 시절의 잔존 코드로, 현재 화면에서 쓰이지 않습니다.
-
-- `components/news/NewsTimeline.tsx`, `RealNewsTimeline.tsx`
-- `components/panels/TodayMovesPanel.tsx`, `SimilarCasesPanel.tsx`
-- `lib/event-selectors.ts`
-- `lib/today-moves.ts` — 실제 등락률은 쓰지만 원인 후보로 아직 예시 이벤트(`eventsFor`)를 참조
-- `supabase/`, `src/app/api/`, `vercel.json`
+- `today-moves.ts`는 등락률 순위만 낸다. 그날의 원인 뉴스를 붙이려면
+  `news-pins.ts`의 거래일 매핑을 대시보드로 끌어오면 된다.
+- 감성 분석이 키워드 사전 기반이라 중립 비율이 높다.
 
 ---
 

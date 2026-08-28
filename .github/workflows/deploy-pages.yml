@@ -50,12 +50,6 @@ jobs:
       - name: 의존성 설치
         run: pnpm install --frozen-lockfile
 
-      # GitHub Pages에는 서버 런타임이 없어 Route Handler를 실행할 수 없다.
-      # 정적 export 대상에서 제외한다. (Next.js는 라우트 단위 제외 옵션이 없어
-      # 빌드 직전에 디렉터리를 제거하는 방식을 쓴다. 저장소 소스는 그대로 유지된다.)
-      - name: API 라우트 제외 (정적 배포)
-        run: rm -rf src/app/api
-
       - name: 정적 빌드
         env:
           GITHUB_PAGES: 'true'

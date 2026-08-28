@@ -163,9 +163,7 @@ python scripts/collect_minutes.py     # 분봉 → public/minutes/
 
 ```bash
 cd stockpulse
-rm -rf src/app/api        # Pages에는 서버가 없어 Route Handler를 제외한다
 GITHUB_PAGES=true PAGES_BASE_PATH=/trading-diary pnpm build
-git checkout src/app/api  # 복원 — 저장소 소스는 유지해야 한다
 npx serve out
 ```
 

@@ -9,7 +9,6 @@ import {
   stockMetaMap,
   changeAt,
   dateFor,
-  tradingDate,
   latestQuote,
 } from '@/lib/price-data';
 import { pct, longDate } from '@/lib/format';

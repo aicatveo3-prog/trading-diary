@@ -371,7 +371,6 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
   });
 
   const maxVolume = Math.max(...volumes, 1);
-  const md = marketData(ticker);
 
   return {
     linePoints: points.join(' '),

@@ -17,7 +17,7 @@
  */
 
 import { NewsItem, newsFor } from './news-data';
-import { tradingDates, changeAt, closeSeries } from './price-data';
+import { tradingDates, changeAt } from './price-data';
 
 export interface NewsPin {
   /** 최신 거래일로부터 며칠 전 (0 = 최신) */

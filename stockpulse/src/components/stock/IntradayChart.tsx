@@ -45,9 +45,16 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
 
   const entry = entryFor(ticker);
 
-  // fetch 데이터
+  // 종목·기간·간격이 바뀌면 이전 데이터를 즉시 감추고 로딩 상태로 전환한 뒤
+  // 새 분봉을 fetch한다.
+  //
+  // effect 안의 동기 setState는 보통 cascading render를 유발해 피해야 하지만,
+  // 여기서는 "외부 시스템(fetch)과의 동기화를 시작하기 전에 UI를 로딩 상태로
+  // 되돌리는" 정당한 용도다. 입력이 바뀔 때마다 한 번의 추가 렌더가 있을 뿐이고,
+  // 이걸 없애면 이전 종목의 차트가 새 데이터가 도착할 때까지 남아 오해를 준다.
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 입력 변경 시 로딩 표시(의도적)
     setLoading(true);
     setCursor(null);
 

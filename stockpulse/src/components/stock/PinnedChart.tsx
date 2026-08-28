@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
-import { c, font } from '@/lib/tokens';
+import { c } from '@/lib/tokens';
 import { chartGeometry, dateFor, dayQuote } from '@/lib/price-data';
 import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
 import { pct, shortDate } from '@/lib/format';
