@@ -31,8 +31,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      # yfinance가 필요한 이유:
+      #   1. 분봉 전체 (collect_minutes.py) — FDR은 분봉을 제공하지 않는다
+      #   2. USD/KRW 일봉 — FDR의 환율 날짜가 하루 밀리는 버그가 있다
       - name: 의존성 설치
-        run: pip install --quiet finance-datareader
+        run: pip install --quiet finance-datareader yfinance
 
       # 검증에 실패하면 스크립트가 종료 코드 1을 반환하고 파일을 쓰지 않는다.
       # 잘못된 데이터를 커밋하는 것보다 낡은 데이터를 유지하는 편이 낫다.
@@ -45,15 +48,18 @@ jobs:
       - name: 뉴스 수집
         run: python scripts/collect_news.py
 
-      # 분봉은 약 7거래일치만 제공되므로 매일 수집해 누적한다.
-      # 기존 파일과 병합하며 최근 10거래일을 보관한다.
+      # Yahoo가 5분봉 60일·1시간봉 730일을 제공하므로 누적 병합이 필요 없다.
+      # 매번 새로 받아 public/minutes/{종목}_{간격}.json 으로 분할 저장한다.
+      # (분할 이유: 단일 파일은 번들에 박혀 모든 방문자가 전 종목 데이터를 받게 된다)
       - name: 분봉 수집
         run: python scripts/collect_minutes.py
 
       - name: 변경 사항 커밋
         id: commit
         run: |
-          if git diff --quiet -- src/data; then
+          # 분봉은 public/minutes/ 에 저장되므로 두 경로를 함께 확인한다
+          if git diff --quiet -- src/data public/minutes && \
+             [ -z "$(git ls-files --others --exclude-standard -- public/minutes)" ]; then
             echo "데이터 변경 없음 (휴장일이거나 이미 최신) — 커밋을 건너뜁니다"
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -62,11 +68,18 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          TRADING_DATE=$(python -c "import json;print(json.load(open('src/data/prices.json'))['tradingDate'])")
+          TRADING_DATE=$(python -c "import json;d=json.load(open('src/data/prices.json'));print(d['markets']['KR']['tradingDate'])")
           NEWS_COUNT=$(python -c "import json;d=json.load(open('src/data/news.json'));print(sum(len(v) for v in d['stocks'].values()))")
-          MIN_COUNT=$(python -c "import json;d=json.load(open('src/data/minutes.json'));print(sum(len(b['t']) for s in d['stocks'].values() for b in s.values()))")
+          MIN_COUNT=$(python -c "
+          import json,glob
+          total=0
+          for p in glob.glob('public/minutes/*.json'):
+              d=json.load(open(p))
+              total+=sum(len(b['t']) for b in d['days'].values())
+          print(total)
+          ")
 
-          git add src/data
+          git add src/data public/minutes
           git commit -m "chore(data): 주가·뉴스·분봉 갱신 — 기준일 ${TRADING_DATE}, 뉴스 ${NEWS_COUNT}건, 분봉 ${MIN_COUNT}개"
           git push
 
