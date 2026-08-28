@@ -6,10 +6,12 @@ import { chartGeometry, dateFor, dayQuote } from '@/lib/price-data';
 import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
 import { pct, won, shortDate } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
+import { Resolution } from '@/lib/events-data';
 
 interface PinnedChartProps {
   ticker: string;
   periodDays: number;
+  resolution: Resolution;
   pins: NewsPin[];
   selectedDate: string | null;
   onSelect: (tradingDate: string) => void;
@@ -31,6 +33,7 @@ export type ChartMode = 'line' | 'candle';
 export default function PinnedChart({
   ticker,
   periodDays,
+  resolution,
   pins,
   selectedDate,
   onSelect,
@@ -62,7 +65,7 @@ export default function PinnedChart({
     return () => observer.disconnect();
   }, []);
 
-  const geo = useMemo(() => chartGeometry(ticker, periodDays), [ticker, periodDays]);
+  const geo = useMemo(() => chartGeometry(ticker, periodDays, resolution), [ticker, periodDays, resolution]);
 
   // 기간이 길면 캔들이 1px 미만으로 얇아져 의미가 없다
   const candleWidth = Math.max(1.5, Math.min(11, (chartWidth / geo.span) * 0.62));

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { c, font } from '@/lib/tokens';
-import { PERIODS, PeriodKey } from '@/lib/events-data';
+import { PERIODS, PeriodKey, Resolution } from '@/lib/events-data';
 import { latestQuote, stockMeta, dateFor, closeSeries } from '@/lib/price-data';
 import { newsFor, sentimentSummary } from '@/lib/news-data';
 import { buildNewsPins } from '@/lib/news-pins';
@@ -33,8 +33,10 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
 
   // '전체'는 큰 값을 두었으므로 보유 데이터 길이로 잘라낸다
   const available = closeSeries(ticker).length;
-  const periodDays = Math.min(PERIODS.find(p => p.key === period)?.days ?? 22, available);
-  const periodLabel = PERIODS.find(p => p.key === period)?.label ?? '';
+  const selectedPeriod = PERIODS.find(p => p.key === period);
+  const periodDays = Math.min(selectedPeriod?.days ?? 22, available);
+  const periodLabel = selectedPeriod?.label ?? '';
+  const resolution = selectedPeriod?.resolution ?? 'day';
 
   // 뉴스를 거래일 축에 매핑하고 핀을 선정한다
   const { pins, allGroups, pending } = useMemo(
@@ -106,6 +108,7 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
           <PinnedChart
             ticker={ticker}
             periodDays={periodDays}
+            resolution={resolution}
             pins={pins}
             selectedDate={selectedDate}
             onSelect={handlePinSelect}

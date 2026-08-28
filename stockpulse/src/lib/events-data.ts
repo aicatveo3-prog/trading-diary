@@ -224,14 +224,19 @@ export function eventsFor(ticker: string): StockEvent[] {
  * days는 거래일 수다. 달력일이 아니라 거래일이라 1개월이 22일이다.
  * label은 한글로 둔다 — '1M'은 무슨 뜻인지 바로 읽히지 않는다.
  * '전체'는 보유한 데이터를 모두 쓰도록 큰 값을 두고 호출부에서 clamp한다.
+ *
+ * resolution: 캔들 1개가 나타내는 시간 폭. 기간이 길어질수록 해상도를 낮춰
+ * 캔들 수를 화면에 맞는 범위(50~150개)로 유지한다.
+ * 'day'는 원본 그대로, 'week'와 'month'는 일봉을 집계해 만든다.
  */
 export const PERIODS = [
-  { key: '1W' as const, label: '1주', days: 5 },
-  { key: '1M' as const, label: '1개월', days: 22 },
-  { key: '3M' as const, label: '3개월', days: 64 },
-  { key: '6M' as const, label: '6개월', days: 125 },
-  { key: '1Y' as const, label: '1년', days: 250 },
-  { key: 'ALL' as const, label: '전체', days: 99999 },
+  { key: '1W' as const, label: '1주', days: 5, resolution: 'day' as const },
+  { key: '1M' as const, label: '1개월', days: 22, resolution: 'day' as const },
+  { key: '3M' as const, label: '3개월', days: 64, resolution: 'day' as const },
+  { key: '6M' as const, label: '6개월', days: 125, resolution: 'day' as const },
+  { key: '1Y' as const, label: '1년', days: 250, resolution: 'week' as const },
+  { key: 'ALL' as const, label: '전체', days: 99999, resolution: 'week' as const },
 ];
 
 export type PeriodKey = (typeof PERIODS)[number]['key'];
+export type Resolution = 'day' | 'week' | 'month';

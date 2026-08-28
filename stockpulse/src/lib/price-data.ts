@@ -192,24 +192,134 @@ export interface ChartGeometry {
   nearestDay: (xPct: number) => number | null;
 }
 
+import { Resolution } from './events-data';
+
 const VIEW_W = 1000;
 const VIEW_H = 296;
+
+// --- 집계 ---
+
+interface AggregatedBar {
+  /** 이 바의 첫 거래일 인덱스 (원본 dates 배열 기준) */
+  startIdx: number;
+  /** 이 바의 마지막 거래일 인덱스 */
+  endIdx: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/**
+ * 일봉을 주봉 또는 월봉으로 집계한다.
+ *
+ * OHLCV 집계 규칙:
+ *   O = 구간 첫 캔들의 시가
+ *   H = 구간 내 최고가
+ *   L = 구간 내 최저가
+ *   C = 구간 마지막 캔들의 종가
+ *   V = 구간 거래량 합계
+ *
+ * 주봉: 같은 ISO 주차(월~금)에 속하는 거래일을 묶는다.
+ * 월봉: 같은 연월에 속하는 거래일을 묶는다.
+ */
+function aggregateBars(
+  ticker: string,
+  startIdx: number,
+  endIdx: number,
+  resolution: Resolution
+): AggregatedBar[] {
+  if (resolution === 'day') {
+    // 집계 없이 일봉 그대로 반환
+    const s = series(ticker);
+    const bars: AggregatedBar[] = [];
+    for (let i = startIdx; i <= endIdx; i++) {
+      bars.push({
+        startIdx: i,
+        endIdx: i,
+        open: s.o[i],
+        high: s.h[i],
+        low: s.l[i],
+        close: s.c[i],
+        volume: s.v[i],
+      });
+    }
+    return bars;
+  }
+
+  const s = series(ticker);
+  const dates = prices.dates;
+  const bars: AggregatedBar[] = [];
+
+  let groupKey = '';
+  let bar: AggregatedBar | null = null;
+
+  for (let i = startIdx; i <= endIdx; i++) {
+    const dateStr = dates[i];
+    // 연-월-일 파싱 (new Date(str)는 UTC 해석이라 시간대 문제를 피하기 위해 직접 파싱)
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+
+    let key: string;
+    if (resolution === 'week') {
+      // ISO 주차: 그 주의 월요일 날짜를 키로 쓴다
+      const day = dt.getDay();
+      const monday = new Date(dt);
+      monday.setDate(dt.getDate() - ((day + 6) % 7));
+      key = monday.toISOString().slice(0, 10);
+    } else {
+      // month
+      key = `${y}-${String(m).padStart(2, '0')}`;
+    }
+
+    if (key !== groupKey) {
+      if (bar) bars.push(bar);
+      groupKey = key;
+      bar = {
+        startIdx: i,
+        endIdx: i,
+        open: s.o[i],
+        high: s.h[i],
+        low: s.l[i],
+        close: s.c[i],
+        volume: s.v[i],
+      };
+    } else if (bar) {
+      bar.endIdx = i;
+      bar.high = Math.max(bar.high, s.h[i]);
+      bar.low = Math.min(bar.low, s.l[i]);
+      bar.close = s.c[i];
+      bar.volume += s.v[i];
+    }
+  }
+  if (bar) bars.push(bar);
+
+  return bars;
+}
 
 /**
  * 기간에 맞는 SVG 좌표를 계산한다.
  * 차트 라이브러리를 쓰지 않으므로 여기서 직접 스케일링한다.
+ *
+ * resolution이 'week'이나 'month'이면 일봉을 집계한 뒤 그 결과를 그린다.
+ * 이렇게 하면 1년 차트가 250개(빽빽)가 아니라 52개(선명)로 나온다.
  */
-export function chartGeometry(ticker: string, periodDays: number): ChartGeometry {
+export function chartGeometry(ticker: string, periodDays: number, resolution: Resolution = 'day'): ChartGeometry {
   const s = series(ticker);
   const total = s.c.length;
   const span = Math.max(1, Math.min(periodDays, total));
   const offset = total - span;
 
-  const closes = s.c.slice(offset);
-  const highs = s.h.slice(offset);
-  const lows = s.l.slice(offset);
-  const opens = s.o.slice(offset);
-  const volumes = s.v.slice(offset);
+  // 집계 — resolution에 따라 일봉을 주봉/월봉으로 묶는다
+  const bars = aggregateBars(ticker, offset, total - 1, resolution);
+  const barCount = bars.length;
+
+  const closes = bars.map(b => b.close);
+  const highs = bars.map(b => b.high);
+  const lows = bars.map(b => b.low);
+  const opens = bars.map(b => b.open);
+  const volumes = bars.map(b => b.volume);
 
   // 캔들의 꼬리까지 보이려면 고가·저가를 스케일에 포함해야 한다.
   // 종가만으로 범위를 잡으면 꼬리가 차트 밖으로 삐져나간다.
@@ -219,17 +329,17 @@ export function chartGeometry(ticker: string, periodDays: number): ChartGeometry
   const lo = min - pad;
   const hi = max + pad;
 
-  const X = (i: number) => (span === 1 ? VIEW_W / 2 : (i / (span - 1)) * VIEW_W);
+  const X = (i: number) => (barCount === 1 ? VIEW_W / 2 : (i / (barCount - 1)) * VIEW_W);
   const Y = (v: number) => VIEW_H - ((v - lo) / (hi - lo)) * VIEW_H;
   const toPctX = (x: number) => (x / VIEW_W) * 100;
   const toPctY = (y: number) => (y / VIEW_H) * 100;
 
   const points = closes.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
 
-  // x축 라벨 — 기간이 짧으면 개수를 줄여 겹치지 않게 한다
-  const labelCount = span <= 6 ? span : 5;
+  // x축 라벨 — 집계된 바 개수 기준으로 배치한다
+  const labelCount = barCount <= 6 ? barCount : 5;
   const labelIndices = Array.from({ length: labelCount }, (_, k) =>
-    labelCount === 1 ? 0 : Math.round((k * (span - 1)) / (labelCount - 1))
+    labelCount === 1 ? 0 : Math.round((k * (barCount - 1)) / (labelCount - 1))
   ).filter((v, i, arr) => arr.indexOf(v) === i);
 
   // y축 눈금 5개 — 값이 2개뿐이면 중간 수준을 읽을 수 없다
@@ -250,7 +360,9 @@ export function chartGeometry(ticker: string, periodDays: number): ChartGeometry
     span,
     yTicks,
     xLabels: labelIndices.map(i => {
-      const d = dateFor(span - 1 - i);
+      // 집계된 바의 마지막 거래일을 라벨로 쓴다
+      const bar = bars[i];
+      const d = dateFor(total - 1 - bar.endIdx);
       return `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
     }),
     candles: closes.map((close, i) => {
@@ -260,7 +372,7 @@ export function chartGeometry(ticker: string, periodDays: number): ChartGeometry
       const topPct = toPctY(Y(top));
       const bottomPct = toPctY(Y(bottom));
       return {
-        daysAgo: span - 1 - i,
+        daysAgo: total - 1 - bars[i].endIdx,
         xPct: toPctX(X(i)),
         bodyTopPct: topPct,
         // 시가와 종가가 같으면 높이가 0이 되어 보이지 않으므로 최소 두께를 준다
@@ -271,21 +383,25 @@ export function chartGeometry(ticker: string, periodDays: number): ChartGeometry
       };
     }),
     volumes: volumes.map((v, i) => ({
-      daysAgo: span - 1 - i,
+      daysAgo: total - 1 - bars[i].endIdx,
       xPct: toPctX(X(i)),
       heightPct: (v / maxVolume) * 100,
       rising: closes[i] >= opens[i],
     })),
     positionFor: (daysAgo: number) => {
-      const i = span - 1 - daysAgo;
-      if (i < 0 || i >= closes.length) return null;
-      return { xPct: toPctX(X(i)), yPct: toPctY(Y(closes[i])) };
+      // 뉴스 핀은 daysAgo(거래일 기준)로 위치를 요청한다.
+      // 집계 모드에서는 해당 daysAgo가 속한 바의 x 위치를 반환한다.
+      const targetIdx = total - 1 - daysAgo;
+      const barI = bars.findIndex(b => b.startIdx <= targetIdx && targetIdx <= b.endIdx);
+      if (barI < 0) return null;
+      return { xPct: toPctX(X(barI)), yPct: toPctY(Y(closes[barI])) };
     },
     nearestDay: (xPct: number) => {
-      if (span === 0) return null;
-      const i = Math.round((xPct / 100) * (span - 1));
-      const clamped = Math.max(0, Math.min(span - 1, i));
-      return span - 1 - clamped;
+      if (barCount === 0) return null;
+      const i = Math.round((xPct / 100) * (barCount - 1));
+      const clamped = Math.max(0, Math.min(barCount - 1, i));
+      // 바의 마지막 거래일을 daysAgo로 반환
+      return total - 1 - bars[clamped].endIdx;
     },
   };
 }
