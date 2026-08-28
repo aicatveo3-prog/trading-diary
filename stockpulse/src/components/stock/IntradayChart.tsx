@@ -85,6 +85,40 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
       }
     }
 
+    // 세션 구간 (프리/정규/애프터).
+    //
+    // 다 이어서 보여주되 배경색과 경계선으로 구분한다. 나누지 않는다 —
+    // 04:00~20:00이 한 줄로 그려지고, 그 위에 어느 구간이 프리·정규·애프터인지
+    // 표시만 얹는다.
+    //
+    // 구간은 세션이 바뀌거나 날짜가 바뀌면 끊는다. 한국 종목은 세션이 전부
+    // 정규장(1)이라 밴드도 경계선도 생기지 않는다 — 미국 종목에서만 나타난다.
+    //
+    // 경계(xPct)는 두 막대 사이 중점으로 잡는다. 막대 위치를 그대로 쓰면
+    // 배경이 캔들을 반쯤 덮거나 비게 된다.
+    const sessionBands: { startPct: number; endPct: number; session: number }[] = [];
+    const sessionLines: number[] = [];
+    const midPct = (i: number) => ((X(i - 1) + X(i)) / 2 / VIEW_W) * 100;
+
+    let runStart = 0;
+    for (let i = 1; i <= bars.length; i++) {
+      const end = i === bars.length;
+      const sessionChanged = !end && bars[i].session !== bars[i - 1].session;
+      const dateChanged = !end && bars[i].date !== bars[i - 1].date;
+
+      if (end || sessionChanged || dateChanged) {
+        sessionBands.push({
+          startPct: runStart === 0 ? 0 : midPct(runStart),
+          endPct: end ? 100 : midPct(i),
+          session: bars[runStart].session,
+        });
+        // 같은 날 안에서 세션이 바뀌는 지점에만 경계선을 긋는다.
+        // 날짜 경계는 이미 dayBoundaries가 별도로 그린다.
+        if (sessionChanged) sessionLines.push(midPct(i));
+        runStart = i;
+      }
+    }
+
     const TICKS = 5;
     const yTicks = Array.from({ length: TICKS }, (_, k) => {
       const value = hi - ((hi - lo) * k) / (TICKS - 1);
@@ -101,6 +135,8 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
       lo,
       yTicks,
       dayBoundaries,
+      sessionBands,
+      sessionLines,
       maxVolume,
       xOf: (i: number) => (X(i) / VIEW_W) * 100,
       yOf: (v: number) => (Y(v) / VIEW_H) * 100,
@@ -110,6 +146,9 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
   const barWidth = bars.length > 0 ? Math.max(1, Math.min(8, 700 / bars.length)) : 2;
   // 캔들 모드: interval >= 30분이면 캔들로 표시, 아래는 선 차트
   const showCandles = interval >= 30 && bars.length <= 200;
+  // 정규장 외 데이터(프리·애프터)가 있으면 세션 범례를 보여준다.
+  // 한국 종목은 전부 정규장이라 범례가 뜨지 않는다.
+  const hasExtendedHours = bars.some(b => b.session !== 1);
 
   const handleMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -229,6 +268,46 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
         onMouseLeave={() => setCursor(null)}
         style={{ position: 'relative', height: PRICE_H }}
       >
+        {/*
+          세션 배경 — 정규장 외(프리·애프터) 구간에만 옅은 색을 깐다.
+          정규장은 기본 배경 그대로 두어, "본장이 어디인지"가 대비로 드러나게 한다.
+          맨 먼저 그려 그리드·차트 아래에 깔린다.
+        */}
+        {geo.sessionBands.map((band, i) =>
+          band.session === 1 ? null : (
+            <div
+              key={`band-${i}`}
+              title={band.session === 0 ? '프리마켓' : '애프터마켓'}
+              style={{
+                position: 'absolute',
+                left: `${band.startPct}%`,
+                width: `${band.endPct - band.startPct}%`,
+                top: 0,
+                bottom: 0,
+                // 프리(아침)와 애프터(저녁)를 살짝 다른 톤으로 구분한다
+                background: band.session === 0 ? 'rgba(70,110,170,0.07)' : 'rgba(150,110,70,0.08)',
+                pointerEvents: 'none',
+              }}
+            />
+          )
+        )}
+
+        {/* 세션 경계선 — 같은 날 안에서 프리→정규, 정규→애프터가 바뀌는 지점 */}
+        {geo.sessionLines.map((xPct, i) => (
+          <div
+            key={`sline-${i}`}
+            style={{
+              position: 'absolute',
+              left: `${xPct}%`,
+              top: 0,
+              bottom: 0,
+              width: 1,
+              background: c.borderSoft,
+              pointerEvents: 'none',
+            }}
+          />
+        ))}
+
         {geo.yTicks.map((tick, i) => (
           <div
             key={i}
@@ -453,6 +532,15 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
           flexWrap: 'wrap',
         }}
       >
+        {/* 세션 범례 — 미국 종목처럼 정규장 외 거래가 있을 때만 */}
+        {hasExtendedHours && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11 }}>
+            <LegendSwatch color="rgba(70,110,170,0.35)" label="프리마켓" />
+            <LegendSwatch color="transparent" label="정규장" bordered />
+            <LegendSwatch color="rgba(150,110,70,0.4)" label="애프터마켓" />
+          </div>
+        )}
+
         <span style={{ fontSize: 11.5, color: c.inkSoft }}>
           {showCandles
             ? 'OHLC 캔들 차트 · 시가/고가/저가/종가 표시'
@@ -463,5 +551,32 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
         </span>
       </div>
     </div>
+  );
+}
+
+/** 세션 범례의 색 견본 하나 */
+function LegendSwatch({
+  color,
+  label,
+  bordered,
+}: {
+  color: string;
+  label: string;
+  bordered?: boolean;
+}) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: c.inkSoft }}>
+      <span
+        style={{
+          width: 11,
+          height: 11,
+          borderRadius: 2,
+          background: color,
+          border: bordered ? `1px solid ${c.borderBtn}` : 'none',
+          flexShrink: 0,
+        }}
+      />
+      {label}
+    </span>
   );
 }
