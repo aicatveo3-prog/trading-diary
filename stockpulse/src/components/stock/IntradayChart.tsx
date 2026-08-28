@@ -114,8 +114,12 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
 
   const lineColor = geo.rising ? colors.up : colors.down;
   const firstClose = bars[0].close;
-  const lastClose = bars[bars.length - 1].close;
+  const lastBar = bars[bars.length - 1];
+  const lastClose = lastBar.close;
   const periodChange = ((lastClose - firstClose) / firstClose) * 100;
+
+  // 마지막 바가 15:30이 아니면 그 날은 아직 장이 진행 중이다
+  const isPartialDay = lastBar.time < '1530';
 
   return (
     <div style={{ padding: '16px 26px 8px' }}>
@@ -141,6 +145,17 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
           }}
         >
           {interval}분봉
+        </span>
+
+        {/*
+          분봉은 실시간이라 일봉보다 최신일 수 있다.
+          헤더의 '장마감 종가'와 차트 마지막 값이 다른 이유를 드러내야
+          사용자가 숫자 차이를 오류로 오해하지 않는다.
+        */}
+        <span style={{ fontSize: 11, color: c.inkFaint }}>
+          {formatMinuteDate(lastBar.date)}
+          {isPartialDay ? ' 장중' : ' 장마감'}
+          {' 기준'}
         </span>
 
         {cursorBar ? (
