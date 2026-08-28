@@ -230,7 +230,8 @@ export function eventsFor(ticker: string): StockEvent[] {
  * 'day'는 원본 그대로, 'week'와 'month'는 일봉을 집계해 만든다.
  */
 export const PERIODS = [
-  { key: '1W' as const, label: '1주', days: 5, resolution: 'day' as const },
+  { key: '1D' as const, label: '1일', days: 1, resolution: 'minute' as const, interval: 5 as const },
+  { key: '1W' as const, label: '1주', days: 5, resolution: 'minute' as const, interval: 30 as const },
   { key: '1M' as const, label: '1개월', days: 22, resolution: 'day' as const },
   { key: '3M' as const, label: '3개월', days: 64, resolution: 'day' as const },
   { key: '6M' as const, label: '6개월', days: 125, resolution: 'day' as const },
@@ -239,4 +240,5 @@ export const PERIODS = [
 ];
 
 export type PeriodKey = (typeof PERIODS)[number]['key'];
-export type Resolution = 'day' | 'week' | 'month';
+/** 'minute'는 분봉(별도 데이터), 'day'는 일봉 원본, 'week'/'month'는 일봉 집계 */
+export type Resolution = 'day' | 'week' | 'month' | 'minute';

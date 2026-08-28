@@ -5,12 +5,14 @@ import { c, font } from '@/lib/tokens';
 import { PERIODS, PeriodKey, Resolution } from '@/lib/events-data';
 import { latestQuote, stockMeta, dateFor, closeSeries } from '@/lib/price-data';
 import { newsFor, sentimentSummary } from '@/lib/news-data';
+import { hasMinutes } from '@/lib/minute-data';
 import { buildNewsPins } from '@/lib/news-pins';
 import { shortDate } from '@/lib/format';
 
 import StockHeaderCard from '@/components/stock/StockHeaderCard';
 import PeriodSelector from '@/components/stock/PeriodSelector';
 import PinnedChart from '@/components/stock/PinnedChart';
+import IntradayChart from '@/components/stock/IntradayChart';
 import GroupedNewsTimeline from '@/components/news/GroupedNewsTimeline';
 import PromiseCard from '@/components/panels/PromiseCard';
 
@@ -37,6 +39,9 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
   const periodDays = Math.min(selectedPeriod?.days ?? 22, available);
   const periodLabel = selectedPeriod?.label ?? '';
   const resolution = selectedPeriod?.resolution ?? 'day';
+  const isIntraday = resolution === 'minute';
+  const minuteInterval = (selectedPeriod as { interval?: 5 | 30 })?.interval ?? 5;
+  const hasIntraday = hasMinutes(ticker);
 
   // 뉴스를 거래일 축에 매핑하고 핀을 선정한다
   const { pins, allGroups, pending } = useMemo(
@@ -99,20 +104,34 @@ export default function StockDetailView({ ticker }: StockDetailViewProps) {
             }}
           >
             <div style={{ fontSize: 12.5, color: c.inkMid }}>
-              최근 {periodLabel} · 거래일 {periodDays}일
-              {' · '}뉴스 핀 <strong style={{ color: c.ink }}>{pins.length}개</strong>
+              {isIntraday ? (
+                <>
+                  최근 {periodLabel} · {minuteInterval}분봉
+                  {!hasIntraday && ' · 분봉 데이터 없음'}
+                </>
+              ) : (
+                <>
+                  최근 {periodLabel} · 거래일 {periodDays}일
+                  {' · '}뉴스 핀 <strong style={{ color: c.ink }}>{pins.length}개</strong>
+                </>
+              )}
             </div>
             <PeriodSelector selected={period} onChange={setPeriod} />
           </div>
 
-          <PinnedChart
-            ticker={ticker}
-            periodDays={periodDays}
-            resolution={resolution}
-            pins={pins}
-            selectedDate={selectedDate}
-            onSelect={handlePinSelect}
-          />
+          {/* 분봉 구간과 일봉 구간은 시간축과 사용 가능한 데이터가 달라 컴포넌트를 분리했다 */}
+          {isIntraday ? (
+            <IntradayChart ticker={ticker} days={periodDays} interval={minuteInterval} />
+          ) : (
+            <PinnedChart
+              ticker={ticker}
+              periodDays={periodDays}
+              resolution={resolution}
+              pins={pins}
+              selectedDate={selectedDate}
+              onSelect={handlePinSelect}
+            />
+          )}
         </div>
 
         {/* 날짜별 뉴스 타임라인 */}
