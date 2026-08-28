@@ -102,6 +102,35 @@ def normalize_ohlc(o, h, l, c) -> tuple:
     return o, hi, lo, c
 
 
+def close_only_fallback(o, h, l, c) -> tuple[tuple, bool]:
+    """
+    시가·고가·저가가 0으로 비어 있고 종가만 유효한 행을 처리한다.
+
+    FDR은 값을 NaN이 아니라 0으로 채워 보내는 경우가 있다. is_missing()은
+    NaN만 걸러내므로 0은 그대로 통과하고, normalize_ohlc()가 min()을 계산해
+    저가가 0이 되어 검증에서 걸린다.
+
+    실측: VIX 2026-08-27 → O=0.00 H=0.00 L=0.00 C=14.51
+    (전날까지는 O=15.65 H=15.74 L=15.21 C=15.21 로 정상이었다.
+     FDR이 데이터를 갱신하면서 OHLC만 0으로 덮어썼다)
+
+    시장별로 종목이 같은 거래일 축을 공유하므로 이 행만 빼면 배열 길이가
+    어긋난다. 그래서 종가로 네 값을 채운다 — 그날 '움직임을 모른다'는 뜻이며,
+    캔들은 도지(십자)로 그려진다. 가짜 고가·저가를 만들지는 않는다.
+
+    수집기는 매번 전체 기간을 새로 받으므로, FDR이 OHLC를 복구하면
+    다음 실행에서 자동으로 정상 값으로 돌아온다.
+
+    반환: ((o, h, l, c), 종가로_대체했는지)
+    """
+    if c <= 0:
+        # 종가마저 없으면 손쓸 수 없다 — 검증에서 걸러진다
+        return (o, h, l, c), False
+    if o > 0 and h > 0 and l > 0:
+        return (o, h, l, c), False
+    return (c, c, c, c), True
+
+
 def safe_volume(row) -> int:
     """거래량. 환율·일부 지수는 거래량이 없거나 NaN이다."""
     if "Volume" not in row.index:
@@ -201,6 +230,7 @@ def build_market_payload(market: str, frames: dict) -> dict:
         by_date = indexed[entry.id]
         o, h, l, c, v = [], [], [], [], []
         fixed = 0
+        close_only = 0
 
         for day in axis:
             row = by_date.get(day)
@@ -214,6 +244,12 @@ def build_market_payload(market: str, frames: dict) -> dict:
                 continue
 
             ro, rh, rl, rc = (num(row[k]) for k in ("Open", "High", "Low", "Close"))
+
+            # OHLC가 0으로 비어 있으면 종가로 채운다 (FDR의 VIX 등)
+            (ro, rh, rl, rc), used_close = close_only_fallback(ro, rh, rl, rc)
+            if used_close:
+                close_only += 1
+
             no, nh, nl, nc = normalize_ohlc(ro, rh, rl, rc)
             if (nh, nl) != (rh, rl):
                 fixed += 1
@@ -227,6 +263,8 @@ def build_market_payload(market: str, frames: dict) -> dict:
         if fixed:
             log(f"    {entry.id} OHLC 보정 {fixed}건")
             fixed_total += fixed
+        if close_only:
+            log(f"    {entry.id} 종가만 제공된 행 {close_only}건 — OHLC를 종가로 채웠습니다")
 
         stocks[entry.id] = {"o": o, "h": h, "l": l, "c": c, "v": v}
 
