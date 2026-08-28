@@ -32,17 +32,12 @@ from pathlib import Path
 
 # --- 설정 ---
 
-TARGETS = [
-    {"ticker": "005930", "name": "삼성전자"},
-    {"ticker": "000660", "name": "SK하이닉스"},
-    {"ticker": "035720", "name": "카카오"},
-    {"ticker": "035420", "name": "NAVER"},
-    {"ticker": "247540", "name": "에코프로비엠"},
-    {"ticker": "012450", "name": "한화에어로스페이스"},
-]
+# 종목 목록은 universe.json 단일 소스에서 읽는다.
+# 하드코딩하면 종목을 바꿀 때 수집기와 화면이 어긋난다 (실제로 그랬다).
+from universe import load_universe
 
 # 종목당 가져올 최대 기사 수 (Google News RSS는 최대 ~100건 반환)
-MAX_PER_STOCK = 30
+MAX_PER_STOCK = 100
 
 # 며칠 이내 기사만 유지할지 (오래된 기사는 차트 기간을 벗어남)
 MAX_AGE_DAYS = 90
@@ -112,9 +107,9 @@ def extract_source(item) -> str:
 
 # --- 수집 ---
 
-def fetch_news_for_stock(name: str) -> list[dict]:
-    """종목명으로 Google News RSS를 검색해 기사 목록을 반환한다."""
-    query = urllib.parse.quote(f"{name} 주가")
+def fetch_news_for_stock(search_query: str) -> list[dict]:
+    """검색어로 Google News RSS를 검색해 기사 목록을 반환한다."""
+    query = urllib.parse.quote(search_query)
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
 
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; StockPulse/1.0)"})
@@ -166,6 +161,48 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+# --- 누적 병합 ---
+
+def load_existing() -> dict[str, list[dict]]:
+    """
+    기존 news.json을 읽어 종목별 기사 목록을 반환한다.
+
+    Google News RSS는 '최근' 기사만 준다. 매번 덮어쓰면 과거 기사가 사라져
+    커버리지가 낮게 유지된다 (실측: 282거래일 중 52일 = 18%).
+    그래서 기존 기사에 새 기사를 병합해 쌓는다.
+    """
+    path = DATA_DIR / "news.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("stocks", {})
+    except Exception as e:
+        log(f"  경고: 기존 news.json을 읽을 수 없습니다 ({e}). 새로 시작합니다.")
+        return {}
+
+
+def merge_articles(old: list[dict], new: list[dict]) -> list[dict]:
+    """
+    기사를 병합한다. id(URL 해시)로 중복을 제거하고 발행일 역순으로 정렬한다.
+    MAX_AGE_DAYS를 넘은 기사는 버린다 — 차트 기간을 벗어나면 쓸 곳이 없다.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
+    by_id: dict[str, dict] = {}
+
+    # 새 기사를 나중에 넣어 최신 감성 분석 결과로 갱신되게 한다
+    for article in old + new:
+        try:
+            published = datetime.fromisoformat(article["publishedAt"])
+        except (ValueError, KeyError):
+            continue
+        if published < cutoff:
+            continue
+        by_id[article["id"]] = article
+
+    return sorted(by_id.values(), key=lambda a: a["publishedAt"], reverse=True)
+
+
 # --- 메인 ---
 
 def main() -> int:
@@ -173,21 +210,39 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="기록하지 않고 확인만")
     args = parser.parse_args()
 
-    log("[1/3] Google News RSS 수집")
-    all_news: dict[str, list[dict]] = {}
+    entries = load_universe()
+    existing = load_existing()
 
-    for t in TARGETS:
-        ticker = t["ticker"]
-        name = t["name"]
+    # universe에서 빠진 종목의 기사는 버린다 (종목 교체 시 옛 데이터가 남는 문제)
+    valid_ids = {e.id for e in entries}
+    dropped = set(existing) - valid_ids
+    if dropped:
+        log(f"[0/3] universe에 없는 종목 {len(dropped)}개의 뉴스를 제거합니다: {sorted(dropped)}")
+        existing = {k: v for k, v in existing.items() if k in valid_ids}
+
+    log(f"[1/3] Google News RSS 수집 ({len(entries)}종목)")
+    all_news: dict[str, list[dict]] = {}
+    new_count = 0
+
+    for entry in entries:
+        prior = existing.get(entry.id, [])
         try:
-            articles = fetch_news_for_stock(name)
-            all_news[ticker] = articles
-            pos = sum(1 for a in articles if a["sentiment"] == "positive")
-            neg = sum(1 for a in articles if a["sentiment"] == "negative")
-            log(f"  {ticker} {name:<12} {len(articles):>3}건  (긍정 {pos} / 부정 {neg} / 중립 {len(articles)-pos-neg})")
+            fetched = fetch_news_for_stock(entry.news_query)
+            merged = merge_articles(prior, fetched)
+            added = len(merged) - len(prior)
+            new_count += max(0, added)
+            all_news[entry.id] = merged
+
+            pos = sum(1 for a in merged if a["sentiment"] == "positive")
+            neg = sum(1 for a in merged if a["sentiment"] == "negative")
+            log(
+                f"  {entry.id:<8} {entry.name:<16} 총 {len(merged):>3}건"
+                f" (신규 +{added:<3})  긍정 {pos} / 부정 {neg} / 중립 {len(merged)-pos-neg}"
+            )
         except Exception as e:
-            log(f"  {ticker} {name:<12}  실패: {e}")
-            all_news[ticker] = []
+            # 실패해도 기존 기사는 유지한다 — 일시적 네트워크 오류로 데이터를 잃지 않는다
+            all_news[entry.id] = merge_articles(prior, [])
+            log(f"  {entry.id:<8} {entry.name:<16} 실패: {e} (기존 {len(prior)}건 유지)")
 
         # Rate limit 대응
         time.sleep(1)
@@ -195,16 +250,21 @@ def main() -> int:
     log("[2/3] 검증")
     total = sum(len(v) for v in all_news.values())
     if total == 0:
-        log("  경고: 수집된 뉴스가 0건입니다. 네트워크 문제일 수 있습니다.")
+        log("  경고: 기사가 0건입니다. 네트워크 문제일 수 있습니다.")
         return 1
 
-    # 최소 3종목 이상에서 뉴스가 있어야 정상으로 본다
     stocks_with_news = sum(1 for v in all_news.values() if len(v) > 0)
     if stocks_with_news < 3:
         log(f"  경고: {stocks_with_news}종목에서만 뉴스가 수집됐습니다. 비정상.")
         return 1
 
-    log(f"  통과: {total}건 ({stocks_with_news}종목)")
+    # 기존보다 줄어들면 뭔가 잘못된 것이다 (병합 로직 버그 등)
+    prior_total = sum(len(v) for v in existing.values())
+    if prior_total > 0 and total < prior_total * 0.9:
+        log(f"  경고: 기사가 {prior_total}건 → {total}건으로 줄었습니다. 기록을 중단합니다.")
+        return 1
+
+    log(f"  통과: 총 {total}건 ({stocks_with_news}/{len(entries)}종목) · 이번 실행 신규 +{new_count}건")
 
     if args.dry_run:
         log("\n--dry-run: 기록을 건너뜁니다")
@@ -220,9 +280,9 @@ def main() -> int:
     path = DATA_DIR / "news.json"
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     path.write_text(text + "\n", encoding="utf-8")
-    log(f"  {path.relative_to(path.parent.parent.parent)}  {len(text):,} bytes  ({total}건)")
+    log(f"  news.json  {len(text):,} bytes  ({total}건)")
 
-    log(f"\n완료 — {total}건 수집")
+    log(f"\n완료 — 총 {total}건 (신규 +{new_count})")
     return 0
 
 
