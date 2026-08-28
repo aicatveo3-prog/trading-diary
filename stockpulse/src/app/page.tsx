@@ -12,13 +12,17 @@ import {
   tradingDate,
   latestQuote,
 } from '@/lib/price-data';
-import { pct, longDate, shortDate, won } from '@/lib/format';
+import { pct, longDate } from '@/lib/format';
+import { entryFor, formatPrice, groupedEntries } from '@/lib/universe';
 import { useConvention } from '@/lib/convention-context';
 import MarketIndexStrip from '@/components/panels/MarketIndexStrip';
 import PromiseCard from '@/components/panels/PromiseCard';
 
-/** 워치리스트 — 실 데이터 연결 시 /api/watchlist에서 조회 */
-const WATCHED = ['005930', '000660', '035720', '035420'];
+/**
+ * 워치리스트 기본값 — 실 데이터 연결 시 /api/watchlist에서 조회.
+ * 한국·미국을 섞어 두 시장을 함께 보게 한다.
+ */
+const WATCHED = ['005930', '000660', 'NVDA', 'MU'];
 
 export default function DashboardPage() {
   const { colors } = useConvention();
@@ -77,6 +81,7 @@ export default function DashboardPage() {
             {moves.map(move => {
               const dirColor = move.changeRate >= 0 ? colors.up : colors.down;
               const quote = latestQuote(move.ticker);
+              const entry = entryFor(move.ticker);
 
               return (
                 <Link
@@ -85,7 +90,7 @@ export default function DashboardPage() {
                   className="gc-row"
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 110px',
+                    gridTemplateColumns: '1fr 130px',
                     gap: 16,
                     alignItems: 'center',
                     padding: '15px 26px',
@@ -97,13 +102,27 @@ export default function DashboardPage() {
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 14.5, fontWeight: 500 }}>{move.name}</span>
                       <span style={{ fontSize: 11, color: c.inkFaint }}>{move.ticker}</span>
+                      {/* 시장 구분 — 한국·미국이 섞여 있어 표시가 필요하다 */}
+                      <span
+                        style={{
+                          fontSize: 9.5,
+                          padding: '1px 5px',
+                          borderRadius: 2,
+                          background: c.surfaceMuted,
+                          color: c.inkSoft,
+                        }}
+                      >
+                        {move.market}
+                      </span>
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontFamily: font.serif, fontSize: 17, fontWeight: 700, color: dirColor }}>
                       {pct(move.changeRate)}
                     </div>
-                    <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 2 }}>{won(quote.price)}</div>
+                    <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 2 }}>
+                      {entry ? formatPrice(quote.price, entry) : quote.price.toLocaleString('ko-KR')}
+                    </div>
                   </div>
                 </Link>
               );
@@ -212,6 +231,69 @@ export default function DashboardPage() {
               );
             })}
           </div>
+        </div>
+
+        {/* 전체 종목 — 그룹별. 30종목 전부에 접근할 수 있어야 한다 */}
+        <div style={{ background: c.surface, border: `1px solid ${c.border}`, padding: '18px 20px' }}>
+          <div style={{ fontFamily: font.serif, fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
+            전체 종목
+          </div>
+          <div style={{ fontSize: 11, color: c.inkFaint, marginBottom: 14 }}>
+            {Object.keys(metas).length}종목 · 한국 + 미국
+          </div>
+
+          {groupedEntries().map(({ group, items }) => (
+            <div key={group} style={{ marginBottom: 14 }}>
+              <div
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  color: c.inkSoft,
+                  marginBottom: 7,
+                  paddingBottom: 4,
+                  borderBottom: `1px solid ${c.borderFaint}`,
+                }}
+              >
+                {group}
+              </div>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {items.map(entry => {
+                  const rate = changeAt(entry.id, 0);
+                  const dirColor = rate >= 0 ? colors.up : colors.down;
+                  return (
+                    <Link
+                      key={entry.id}
+                      href={`/stocks/${entry.id}`}
+                      className="gc-fade"
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 58px',
+                        gap: 8,
+                        alignItems: 'baseline',
+                        color: c.ink,
+                        textDecoration: 'none',
+                      }}
+                    >
+                      <span style={{ fontSize: 12.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {entry.name}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          textAlign: 'right',
+                          color: dirColor,
+                        }}
+                      >
+                        {pct(rate)}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
 
         <PromiseCard />

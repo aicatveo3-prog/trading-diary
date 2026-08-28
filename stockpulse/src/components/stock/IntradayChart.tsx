@@ -1,14 +1,16 @@
 'use client';
 
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import { c } from '@/lib/tokens';
 import {
   aggregateMinutes,
   MinuteInterval,
+  MinuteBar,
   formatMinuteDate,
   formatMinuteTime,
 } from '@/lib/minute-data';
-import { won, pct } from '@/lib/format';
+import { entryFor, formatPrice } from '@/lib/universe';
+import { pct } from '@/lib/format';
 import { useConvention } from '@/lib/convention-context';
 
 interface IntradayChartProps {
@@ -25,27 +27,46 @@ const VIEW_W = 1000;
 const VIEW_H = 296;
 
 /**
- * 장중 차트 — 분봉 기반
+ * 장중 차트 — 분봉 기반 (OHLC 캔들 지원)
  *
  * PinnedChart와 분리한 이유:
  *   1. 시간축이 다르다. 일봉은 거래일 인덱스, 분봉은 날짜+시각이다.
- *   2. OHLC가 없어 캔들을 그릴 수 없다. 선 차트만 가능하다.
- *   3. 뉴스 핀을 꽂지 않는다. 뉴스 타임스탬프의 20.8%가 정시(00분)로
+ *   2. 뉴스 핀을 꽂지 않는다. 뉴스 타임스탬프의 20.8%가 정시(00분)로
  *      반올림되어 있어, 분 단위 위치에 핀을 꽂으면 없는 정밀도를
  *      있는 것처럼 보여주게 된다.
+ *
+ * 데이터를 런타임 fetch로 가져오므로 로딩 상태가 있다.
  */
 export default function IntradayChart({ ticker, days, interval }: IntradayChartProps) {
   const { colors } = useConvention();
   const [cursor, setCursor] = useState<number | null>(null);
+  const [bars, setBars] = useState<MinuteBar[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const bars = useMemo(() => aggregateMinutes(ticker, days, interval), [ticker, days, interval]);
+  const entry = entryFor(ticker);
+
+  // fetch 데이터
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setCursor(null);
+
+    aggregateMinutes(ticker, days, interval).then(result => {
+      if (!cancelled) {
+        setBars(result);
+        setLoading(false);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [ticker, days, interval]);
 
   const geo = useMemo(() => {
     if (bars.length === 0) return null;
 
     const closes = bars.map(b => b.close);
-    const min = Math.min(...bars.map(b => b.closeLow));
-    const max = Math.max(...bars.map(b => b.closeHigh));
+    const min = Math.min(...bars.map(b => b.low));
+    const max = Math.max(...bars.map(b => b.high));
     const pad = (max - min) * 0.1 || 1;
     const lo = min - pad;
     const hi = max + pad;
@@ -56,7 +77,7 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
 
     const points = closes.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
 
-    // 날짜가 바뀌는 지점 — 세로 구분선으로 표시한다
+    // 날짜가 바뀌는 지점
     const dayBoundaries: { xPct: number; date: string }[] = [];
     for (let i = 1; i < bars.length; i++) {
       if (bars[i].date !== bars[i - 1].date) {
@@ -76,6 +97,8 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
       linePoints: points.join(' '),
       areaPoints: `0,${VIEW_H} ${points.join(' ')} ${VIEW_W},${VIEW_H}`,
       rising: closes[closes.length - 1] >= closes[0],
+      hi,
+      lo,
       yTicks,
       dayBoundaries,
       maxVolume,
@@ -85,6 +108,8 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
   }, [bars]);
 
   const barWidth = bars.length > 0 ? Math.max(1, Math.min(8, 700 / bars.length)) : 2;
+  // 캔들 모드: interval >= 30분이면 캔들로 표시, 아래는 선 차트
+  const showCandles = interval >= 30 && bars.length <= 200;
 
   const handleMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -97,6 +122,15 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
     [bars.length]
   );
 
+  // 로딩 상태
+  if (loading) {
+    return (
+      <div style={{ padding: '40px 26px', textAlign: 'center', fontSize: 13, color: c.inkSoft }}>
+        분봉 데이터를 불러오는 중...
+      </div>
+    );
+  }
+
   if (!geo || bars.length === 0) {
     return (
       <div style={{ padding: '40px 26px', textAlign: 'center', fontSize: 13, color: c.inkSoft }}>
@@ -106,7 +140,6 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
   }
 
   const cursorBar = cursor !== null ? bars[cursor] : null;
-  // 직전 바 대비 변화 — 분봉은 '전일 대비'가 의미 없으므로 구간 대비로 보여준다
   const cursorChange =
     cursor !== null && cursor > 0
       ? ((bars[cursor].close - bars[cursor - 1].close) / bars[cursor - 1].close) * 100
@@ -118,8 +151,14 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
   const lastClose = lastBar.close;
   const periodChange = ((lastClose - firstClose) / firstClose) * 100;
 
-  // 마지막 바가 15:30이 아니면 그 날은 아직 장이 진행 중이다
+  // 마지막 바 시각으로 장중 여부 판단
   const isPartialDay = lastBar.time < '1530';
+
+  /** 가격 표시 — universe 엔트리가 있으면 통화에 맞게 */
+  const fmtPrice = (v: number) => {
+    if (entry) return formatPrice(v, entry);
+    return v.toLocaleString('ko-KR');
+  };
 
   return (
     <div style={{ padding: '16px 26px 8px' }}>
@@ -147,11 +186,6 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
           {interval}분봉
         </span>
 
-        {/*
-          분봉은 실시간이라 일봉보다 최신일 수 있다.
-          헤더의 '장마감 종가'와 차트 마지막 값이 다른 이유를 드러내야
-          사용자가 숫자 차이를 오류로 오해하지 않는다.
-        */}
         <span style={{ fontSize: 11, color: c.inkFaint }}>
           {formatMinuteDate(lastBar.date)}
           {isPartialDay ? ' 장중' : ' 장마감'}
@@ -165,7 +199,7 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
             </span>
             <span style={{ color: c.inkMid }}>
               <span style={{ color: c.inkFaint }}>종가 </span>
-              <span style={{ fontWeight: 700, color: c.ink }}>{won(cursorBar.close)}</span>
+              <span style={{ fontWeight: 700, color: c.ink }}>{fmtPrice(cursorBar.close)}</span>
             </span>
             {cursorChange !== null && (
               <span
@@ -244,14 +278,57 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
           preserveAspectRatio="none"
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
         >
-          <polygon points={geo.areaPoints} fill={`${lineColor}14`} />
-          <polyline
-            points={geo.linePoints}
-            fill="none"
-            stroke={lineColor}
-            strokeWidth="1.6"
-            vectorEffect="non-scaling-stroke"
-          />
+          {showCandles ? (
+            /* 캔들 모드 — OHLC가 완비되어 있으므로 실제 캔들을 그린다 */
+            <>
+              {bars.map((bar, i) => {
+                const x = geo.xOf(i);
+                const rising = bar.close >= bar.open;
+                const bodyTop = geo.yOf(Math.max(bar.open, bar.close));
+                const bodyBottom = geo.yOf(Math.min(bar.open, bar.close));
+                const wickTop = geo.yOf(bar.high);
+                const wickBottom = geo.yOf(bar.low);
+                const candleW = Math.max(0.3, Math.min(2.5, 60 / bars.length));
+                const fill = rising ? colors.up : colors.down;
+
+                return (
+                  <g key={`${bar.date}-${bar.time}`}>
+                    {/* 꼬리 */}
+                    <line
+                      x1={`${x}%`}
+                      y1={`${wickTop}%`}
+                      x2={`${x}%`}
+                      y2={`${wickBottom}%`}
+                      stroke={fill}
+                      strokeWidth="0.8"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    {/* 몸통 */}
+                    <rect
+                      x={`${x - candleW / 2}%`}
+                      y={`${bodyTop}%`}
+                      width={`${candleW}%`}
+                      height={`${Math.max(bodyBottom - bodyTop, 0.3)}%`}
+                      fill={fill}
+                      opacity={cursor === i ? 1 : 0.85}
+                    />
+                  </g>
+                );
+              })}
+            </>
+          ) : (
+            /* 선 차트 모드 */
+            <>
+              <polygon points={geo.areaPoints} fill={`${lineColor}14`} />
+              <polyline
+                points={geo.linePoints}
+                fill="none"
+                stroke={lineColor}
+                strokeWidth="1.6"
+                vectorEffect="non-scaling-stroke"
+              />
+            </>
+          )}
         </svg>
 
         {/* 크로스헤어 */}
@@ -304,7 +381,7 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
               pointerEvents: 'none',
             }}
           >
-            {won(tick.value)}
+            {fmtPrice(tick.value)}
           </div>
         ))}
       </div>
@@ -364,7 +441,7 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
           ))}
       </div>
 
-      {/* 분봉의 한계를 명시 */}
+      {/* 분봉 안내 */}
       <div
         style={{
           display: 'flex',
@@ -377,7 +454,9 @@ export default function IntradayChart({ ticker, days, interval }: IntradayChartP
         }}
       >
         <span style={{ fontSize: 11.5, color: c.inkSoft }}>
-          분봉은 종가만 제공되어 캔들을 그릴 수 없습니다
+          {showCandles
+            ? 'OHLC 캔들 차트 · 시가/고가/저가/종가 표시'
+            : '선 차트 (5분봉은 데이터가 많아 선으로 표시)'}
         </span>
         <span style={{ fontSize: 11.5, color: c.inkSoft, marginLeft: 'auto' }}>
           뉴스 핀은 일봉 기간(1개월 이상)에서 표시됩니다

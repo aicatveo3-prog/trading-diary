@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { c, font } from '@/lib/tokens';
 import { stockMetaMap, changeAt, latestQuote, dateFor } from '@/lib/price-data';
-import { pct, shortDate, won, signedAmount } from '@/lib/format';
+import { pct, shortDate } from '@/lib/format';
+import { entryFor, formatPrice, formatChangeAmount } from '@/lib/universe';
 import { useConvention } from '@/lib/convention-context';
 import PromiseCard from '@/components/panels/PromiseCard';
 
@@ -14,9 +15,10 @@ import PromiseCard from '@/components/panels/PromiseCard';
 const WATCHED: { ticker: string; memo: string }[] = [
   { ticker: '005930', memo: '반도체 업황 관세 이슈 추적' },
   { ticker: '000660', memo: 'HBM 증설 진행 확인' },
-  { ticker: '035720', memo: '' },
-  { ticker: '035420', memo: '라인야후 지분 정리 이후' },
-  { ticker: '247540', memo: '미 보조금 정책 영향' },
+  { ticker: '042700', memo: 'HBM 장비 수주 흐름' },
+  { ticker: 'NVDA', memo: 'AI 가속기 수요 — 전체 반도체 방향타' },
+  { ticker: 'MU', memo: '메모리 사이클 — 하이닉스와 함께 확인' },
+  { ticker: 'USDKRW', memo: '환율이 외국인 수급에 미치는 영향' },
 ];
 
 export default function WatchlistPage() {
@@ -50,6 +52,7 @@ export default function WatchlistPage() {
             const rate = changeAt(item.ticker, 0);
             const quote = latestQuote(item.ticker);
             const dirColor = rate >= 0 ? colors.up : colors.down;
+            const entry = entryFor(item.ticker);
 
             return (
               <Link
@@ -94,10 +97,14 @@ export default function WatchlistPage() {
 
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontFamily: font.serif, fontSize: 18, fontWeight: 700 }}>
-                    {won(quote.price)}
+                    {entry ? formatPrice(quote.price, entry) : quote.price.toLocaleString('ko-KR')}
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: dirColor, marginTop: 2 }}>
-                    {pct(rate)} ({signedAmount(quote.changeAmount)})
+                    {pct(rate)} (
+                    {entry
+                      ? formatChangeAmount(quote.changeAmount, entry)
+                      : Math.round(quote.changeAmount).toLocaleString('ko-KR')}
+                    )
                   </div>
                 </div>
               </Link>

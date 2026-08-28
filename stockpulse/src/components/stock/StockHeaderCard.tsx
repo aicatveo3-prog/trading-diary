@@ -1,7 +1,8 @@
 'use client';
 
 import { c, font } from '@/lib/tokens';
-import { pct, signedAmount, won } from '@/lib/format';
+import { pct } from '@/lib/format';
+import { entryFor, formatPrice, formatChangeAmount, typeLabel } from '@/lib/universe';
 import { useConvention } from '@/lib/convention-context';
 
 interface StockHeaderCardProps {
@@ -29,6 +30,7 @@ export default function StockHeaderCard({
 }: StockHeaderCardProps) {
   const { colors } = useConvention();
   const dirColor = changeRate >= 0 ? colors.up : colors.down;
+  const entry = entryFor(ticker);
 
   return (
     <div
@@ -57,6 +59,19 @@ export default function StockHeaderCard({
           <span style={{ fontSize: 12.5, color: c.inkSoft }}>
             {ticker} · {market}
           </span>
+          {entry && (
+            <span
+              style={{
+                fontSize: 10.5,
+                padding: '2px 7px',
+                borderRadius: 2,
+                background: c.surfaceMuted,
+                color: c.inkSoft,
+              }}
+            >
+              {typeLabel(entry.type)}
+            </span>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
@@ -68,10 +83,13 @@ export default function StockHeaderCard({
               letterSpacing: '-0.03em',
             }}
           >
-            {won(price)}
+            {/* 통화별 표기 — 달러는 $, 원화는 정수, 지수는 무단위 */}
+            {entry ? formatPrice(price, entry) : price.toLocaleString('ko-KR')}
           </span>
           <span style={{ fontSize: 15, fontWeight: 700, color: dirColor }}>
-            {pct(changeRate)} ({signedAmount(changeAmount)})
+            {pct(changeRate)} (
+            {entry ? formatChangeAmount(changeAmount, entry) : Math.round(changeAmount).toLocaleString('ko-KR')}
+            )
           </span>
           <span style={{ fontSize: 12, color: c.inkSoft }}>{asOf}</span>
         </div>

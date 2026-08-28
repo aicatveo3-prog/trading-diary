@@ -4,7 +4,8 @@ import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { c, font } from '@/lib/tokens';
 import { chartGeometry, dateFor, dayQuote } from '@/lib/price-data';
 import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
-import { pct, won, shortDate } from '@/lib/format';
+import { pct, shortDate } from '@/lib/format';
+import { entryFor, formatPrice } from '@/lib/universe';
 import { useConvention } from '@/lib/convention-context';
 import { Resolution } from '@/lib/events-data';
 
@@ -39,6 +40,10 @@ export default function PinnedChart({
   onSelect,
 }: PinnedChartProps) {
   const { colors } = useConvention();
+  // 통화별 가격 표기 — 미국 종목을 '원'으로 쓰면 틀린 정보가 된다
+  const entry = entryFor(ticker);
+  const fmtPrice = (v: number) =>
+    entry ? formatPrice(v, entry) : Math.round(v).toLocaleString('ko-KR');
   const [hoveredDate, setHoveredDate] = useState<string | null>(null);
   const [mode, setMode] = useState<ChartMode>('line');
   /** 크로스헤어가 가리키는 거래일 (마우스 위치 기반) */
@@ -164,10 +169,10 @@ export default function PinnedChart({
             <span style={{ fontWeight: 700, color: c.ink }}>
               {shortDate(dateFor(cursorQuote.daysAgo))}
             </span>
-            <QuoteField label="시" value={cursorQuote.open} />
-            <QuoteField label="고" value={cursorQuote.high} />
-            <QuoteField label="저" value={cursorQuote.low} />
-            <QuoteField label="종" value={cursorQuote.close} strong />
+            <QuoteField label="시" value={cursorQuote.open} format={fmtPrice} />
+            <QuoteField label="고" value={cursorQuote.high} format={fmtPrice} />
+            <QuoteField label="저" value={cursorQuote.low} format={fmtPrice} />
+            <QuoteField label="종" value={cursorQuote.close} format={fmtPrice} strong />
             <span
               style={{
                 fontWeight: 700,
@@ -314,7 +319,7 @@ export default function PinnedChart({
               pointerEvents: 'none',
             }}
           >
-            {won(tick.value)}
+            {fmtPrice(tick.value)}
           </div>
         ))}
 
@@ -537,12 +542,22 @@ export default function PinnedChart({
   );
 }
 
-function QuoteField({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
+function QuoteField({
+  label,
+  value,
+  format,
+  strong,
+}: {
+  label: string;
+  value: number;
+  format: (v: number) => string;
+  strong?: boolean;
+}) {
   return (
     <span style={{ color: c.inkMid }}>
       <span style={{ color: c.inkFaint }}>{label} </span>
       <span style={{ fontWeight: strong ? 700 : 500, color: strong ? c.ink : c.inkStrong }}>
-        {won(value)}
+        {format(value)}
       </span>
     </span>
   );
