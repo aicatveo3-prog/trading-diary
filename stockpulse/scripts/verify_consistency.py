@@ -160,10 +160,11 @@ minute_files = sorted(glob.glob(str(ROOT / "public/minutes/*.json")))
 check("분봉 파일 존재", len(minute_files) > 0, "public/minutes/ 가 비어 있다")
 
 if minute_files:
-    expected_files = {f"{sid}_{iv}" for sid in universe_ids for iv in ("5m", "1h")}
+    # 5분봉만 수집한다 (30분봉은 화면에서 5분봉을 묶어 만든다).
+    expected_files = {f"{sid}_5m" for sid in universe_ids}
     found = {Path(p).stem for p in minute_files}
-    check(f"파일 {len(expected_files)}개 (30종목 × 2간격)", found == expected_files,
-          f"누락 {sorted(expected_files - found)[:4]}")
+    check(f"파일 {len(expected_files)}개 (30종목 × 5분봉)", found == expected_files,
+          f"누락 {sorted(expected_files - found)[:4]} / 초과 {sorted(found - expected_files)[:4]}")
 
     total_bars = 0
     bad_struct = []
