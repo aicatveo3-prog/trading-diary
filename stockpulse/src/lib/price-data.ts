@@ -4,13 +4,18 @@
  * scripts/collect_prices.py 가 생성한 JSON을 읽는다.
  * 서버가 없는 정적 배포이므로 데이터는 빌드 시점에 번들에 포함된다.
  *
- * 거래일 축(dates)은 모든 종목이 공유한다 — 종목마다 축이 다르면
- * 차트 x좌표가 어긋나기 때문에 수집 단계에서 이미 정렬해 두었다.
+ * 구조:
+ *   { collectedAt, markets: { KR: { tradingDate, dates, stocks }, US: { ... } } }
+ *
+ * 시장별로 거래일 축(dates)이 분리되어 있다 — KR과 US는 공휴일이 달라
+ * 같은 축을 공유하면 최대 25%의 데이터가 손실되거나 가짜 봉이 생긴다.
+ * 종목은 반드시 자기 시장의 축을 참조해야 한다.
  */
 
 import pricesJson from '@/data/prices.json';
-import indicesJson from '@/data/indices.json';
 import stocksJson from '@/data/stocks.json';
+
+type Market = 'KR' | 'US';
 
 interface OHLCV {
   o: number[];
@@ -20,37 +25,78 @@ interface OHLCV {
   v: number[];
 }
 
-interface PricesFile {
+interface MarketData {
   tradingDate: string;
-  collectedAt: string;
   dates: string[];
   stocks: Record<string, OHLCV>;
 }
 
-const prices = pricesJson as PricesFile;
+interface PricesFile {
+  collectedAt: string;
+  markets: Record<Market, MarketData>;
+}
+
+interface StockMetaRaw {
+  id: string;
+  name: string;
+  market: string;
+  currency: string;
+  type: string;
+  group: string;
+}
+
+const prices = pricesJson as unknown as PricesFile;
+const stocksRaw = stocksJson as unknown as Record<string, StockMetaRaw>;
 
 export const DEFAULT_TICKER = '005930';
 
-/** 공통 거래일 축 (오름차순, 마지막이 최신) */
-export function tradingDates(): string[] {
-  return prices.dates;
+// --- 시장 결정 ---
+
+/** ticker가 어느 시장에 속하는지 판단 */
+function marketOf(ticker: string): Market {
+  const meta = stocksRaw[ticker];
+  if (meta) return meta.market as Market;
+  // 메타에 없으면 실제 데이터에서 찾는다
+  if (ticker in prices.markets.KR.stocks) return 'KR';
+  return 'US';
 }
 
-/** 데이터 기준일 */
-export function tradingDate(): string {
-  return prices.tradingDate;
+function marketData(ticker: string): MarketData {
+  return prices.markets[marketOf(ticker)];
+}
+
+// --- 공개 API ---
+
+/**
+ * 해당 종목의 거래일 축 (오름차순, 마지막이 최신).
+ * 시장별로 다르므로 ticker를 받는다.
+ */
+export function tradingDates(ticker?: string): string[] {
+  if (!ticker) {
+    // 하위 호환: ticker 없이 호출되면 KR 축 반환 (news-pins 등)
+    return prices.markets.KR.dates;
+  }
+  return marketData(ticker).dates;
+}
+
+/** 데이터 기준일 (해당 종목의 시장 기준) */
+export function tradingDate(ticker?: string): string {
+  if (!ticker) return prices.markets.KR.tradingDate;
+  return marketData(ticker).tradingDate;
 }
 
 export function availableTickers(): string[] {
-  return Object.keys(prices.stocks);
+  return Object.keys(stocksRaw);
 }
 
 export function hasPrices(ticker: string): boolean {
-  return ticker in prices.stocks;
+  const m = marketOf(ticker);
+  return ticker in prices.markets[m].stocks;
 }
 
 function series(ticker: string): OHLCV {
-  return prices.stocks[ticker] ?? prices.stocks[DEFAULT_TICKER];
+  const md = marketData(ticker);
+  return md.stocks[ticker] ?? prices.markets.KR.stocks[DEFAULT_TICKER];
 }
 
 /** 종가 배열 */
@@ -62,19 +108,18 @@ export function closeSeries(ticker: string): number[] {
  * daysAgo → Date.
  * daysAgo는 거래일 기준이며 0이 최신 거래일이다.
  */
-export function dateFor(daysAgo: number): Date {
-  const dates = prices.dates;
+export function dateFor(daysAgo: number, ticker?: string): Date {
+  const dates = ticker ? marketData(ticker).dates : prices.markets.KR.dates;
   const i = dates.length - 1 - daysAgo;
   const iso = dates[Math.max(0, Math.min(dates.length - 1, i))];
-  // 'YYYY-MM-DD'를 로컬 자정으로 파싱한다 (new Date(iso)는 UTC로 해석되어
-  // 시간대에 따라 하루 밀릴 수 있다)
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d);
 }
 
 /** 해당 거래일의 데이터가 존재하는지 */
-export function hasDay(daysAgo: number): boolean {
-  return daysAgo >= 0 && daysAgo < prices.dates.length;
+export function hasDay(daysAgo: number, ticker?: string): boolean {
+  const dates = ticker ? marketData(ticker).dates : prices.markets.KR.dates;
+  return daysAgo >= 0 && daysAgo < dates.length;
 }
 
 /** 최신 거래일의 종가와 전일 대비 */
@@ -102,8 +147,6 @@ export function changeAt(ticker: string, daysAgo: number): number {
  * 기준일로부터 spanDays 거래일 뒤까지의 누적 등락률 (%).
  *
  * spanDays가 아직 다 지나지 않았으면 null을 반환한다.
- * 확보된 마지막 거래일까지만 잘라서 계산하면, 예컨대 2거래일치 수익률을
- * '1주 후'라고 표시하게 되어 라벨이 데이터를 왜곡한다.
  */
 export function forwardChange(ticker: string, daysAgo: number, spanDays: number): number | null {
   const c = closeSeries(ticker);
@@ -140,7 +183,7 @@ export interface DayQuote {
 /** 특정 거래일의 시세 전체 */
 export function dayQuote(ticker: string, daysAgo: number): DayQuote | null {
   const s = series(ticker);
-  const dates = prices.dates;
+  const dates = marketData(ticker).dates;
   const i = dates.length - 1 - daysAgo;
   if (i < 0 || i >= dates.length) return null;
 
@@ -161,13 +204,9 @@ export function dayQuote(ticker: string, daysAgo: number): DayQuote | null {
 export interface CandleGeometry {
   daysAgo: number;
   xPct: number;
-  /** 몸통 상단(시가·종가 중 높은 쪽) */
   bodyTopPct: number;
-  /** 몸통 높이 */
   bodyHeightPct: number;
-  /** 꼬리 상단(고가) */
   highPct: number;
-  /** 꼬리 하단(저가) */
   lowPct: number;
   rising: boolean;
 }
@@ -179,16 +218,11 @@ export interface ChartGeometry {
   yMax: number;
   yMin: number;
   xLabels: string[];
-  /** 실제로 그려진 거래일 수 */
   span: number;
-  /** y축 눈금 (위에서 아래로) */
   yTicks: { value: number; yPct: number }[];
-  /** 캔들 좌표 */
   candles: CandleGeometry[];
-  /** 거래량 바 (heightPct는 최대 거래량 대비 비율) */
   volumes: { daysAgo: number; xPct: number; heightPct: number; rising: boolean }[];
   positionFor: (daysAgo: number) => { xPct: number; yPct: number } | null;
-  /** 차트 가로 위치(0~100%)에 가장 가까운 거래일 */
   nearestDay: (xPct: number) => number | null;
 }
 
@@ -200,9 +234,7 @@ const VIEW_H = 296;
 // --- 집계 ---
 
 interface AggregatedBar {
-  /** 이 바의 첫 거래일 인덱스 (원본 dates 배열 기준) */
   startIdx: number;
-  /** 이 바의 마지막 거래일 인덱스 */
   endIdx: number;
   open: number;
   high: number;
@@ -211,19 +243,6 @@ interface AggregatedBar {
   volume: number;
 }
 
-/**
- * 일봉을 주봉 또는 월봉으로 집계한다.
- *
- * OHLCV 집계 규칙:
- *   O = 구간 첫 캔들의 시가
- *   H = 구간 내 최고가
- *   L = 구간 내 최저가
- *   C = 구간 마지막 캔들의 종가
- *   V = 구간 거래량 합계
- *
- * 주봉: 같은 ISO 주차(월~금)에 속하는 거래일을 묶는다.
- * 월봉: 같은 연월에 속하는 거래일을 묶는다.
- */
 function aggregateBars(
   ticker: string,
   startIdx: number,
@@ -231,7 +250,6 @@ function aggregateBars(
   resolution: Resolution
 ): AggregatedBar[] {
   if (resolution === 'day') {
-    // 집계 없이 일봉 그대로 반환
     const s = series(ticker);
     const bars: AggregatedBar[] = [];
     for (let i = startIdx; i <= endIdx; i++) {
@@ -249,7 +267,7 @@ function aggregateBars(
   }
 
   const s = series(ticker);
-  const dates = prices.dates;
+  const dates = marketData(ticker).dates;
   const bars: AggregatedBar[] = [];
 
   let groupKey = '';
@@ -257,13 +275,11 @@ function aggregateBars(
 
   for (let i = startIdx; i <= endIdx; i++) {
     const dateStr = dates[i];
-    // 연-월-일 파싱 (new Date(str)는 UTC 해석이라 시간대 문제를 피하기 위해 직접 파싱)
     const [y, m, d] = dateStr.split('-').map(Number);
     const dt = new Date(y, m - 1, d);
 
     let key: string;
     if (resolution === 'week') {
-      // ISO 주차: 그 주의 월요일 날짜를 키로 쓴다
       const day = dt.getDay();
       const monday = new Date(dt);
       monday.setDate(dt.getDate() - ((day + 6) % 7));
@@ -300,10 +316,6 @@ function aggregateBars(
 
 /**
  * 기간에 맞는 SVG 좌표를 계산한다.
- * 차트 라이브러리를 쓰지 않으므로 여기서 직접 스케일링한다.
- *
- * resolution이 'week'이나 'month'이면 일봉을 집계한 뒤 그 결과를 그린다.
- * 이렇게 하면 1년 차트가 250개(빽빽)가 아니라 52개(선명)로 나온다.
  */
 export function chartGeometry(ticker: string, periodDays: number, resolution: Resolution = 'day'): ChartGeometry {
   const s = series(ticker);
@@ -311,7 +323,6 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
   const span = Math.max(1, Math.min(periodDays, total));
   const offset = total - span;
 
-  // 집계 — resolution에 따라 일봉을 주봉/월봉으로 묶는다
   const bars = aggregateBars(ticker, offset, total - 1, resolution);
   const barCount = bars.length;
 
@@ -321,8 +332,6 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
   const opens = bars.map(b => b.open);
   const volumes = bars.map(b => b.volume);
 
-  // 캔들의 꼬리까지 보이려면 고가·저가를 스케일에 포함해야 한다.
-  // 종가만으로 범위를 잡으면 꼬리가 차트 밖으로 삐져나간다.
   const min = Math.min(...lows);
   const max = Math.max(...highs);
   const pad = (max - min) * 0.1 || 1;
@@ -336,13 +345,11 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
 
   const points = closes.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
 
-  // x축 라벨 — 집계된 바 개수 기준으로 배치한다
   const labelCount = barCount <= 6 ? barCount : 5;
   const labelIndices = Array.from({ length: labelCount }, (_, k) =>
     labelCount === 1 ? 0 : Math.round((k * (barCount - 1)) / (labelCount - 1))
   ).filter((v, i, arr) => arr.indexOf(v) === i);
 
-  // y축 눈금 5개 — 값이 2개뿐이면 중간 수준을 읽을 수 없다
   const TICK_COUNT = 5;
   const yTicks = Array.from({ length: TICK_COUNT }, (_, k) => {
     const value = hi - ((hi - lo) * k) / (TICK_COUNT - 1);
@@ -350,6 +357,7 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
   });
 
   const maxVolume = Math.max(...volumes, 1);
+  const md = marketData(ticker);
 
   return {
     linePoints: points.join(' '),
@@ -360,9 +368,8 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
     span,
     yTicks,
     xLabels: labelIndices.map(i => {
-      // 집계된 바의 마지막 거래일을 라벨로 쓴다
       const bar = bars[i];
-      const d = dateFor(total - 1 - bar.endIdx);
+      const d = dateFor(total - 1 - bar.endIdx, ticker);
       return `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
     }),
     candles: closes.map((close, i) => {
@@ -375,7 +382,6 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
         daysAgo: total - 1 - bars[i].endIdx,
         xPct: toPctX(X(i)),
         bodyTopPct: topPct,
-        // 시가와 종가가 같으면 높이가 0이 되어 보이지 않으므로 최소 두께를 준다
         bodyHeightPct: Math.max(bottomPct - topPct, 0.35),
         highPct: toPctY(Y(highs[i])),
         lowPct: toPctY(Y(lows[i])),
@@ -389,8 +395,6 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
       rising: closes[i] >= opens[i],
     })),
     positionFor: (daysAgo: number) => {
-      // 뉴스 핀은 daysAgo(거래일 기준)로 위치를 요청한다.
-      // 집계 모드에서는 해당 daysAgo가 속한 바의 x 위치를 반환한다.
       const targetIdx = total - 1 - daysAgo;
       const barI = bars.findIndex(b => b.startIdx <= targetIdx && targetIdx <= b.endIdx);
       if (barI < 0) return null;
@@ -400,7 +404,6 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
       if (barCount === 0) return null;
       const i = Math.round((xPct / 100) * (barCount - 1));
       const clamped = Math.max(0, Math.min(barCount - 1, i));
-      // 바의 마지막 거래일을 daysAgo로 반환
       return total - 1 - bars[clamped].endIdx;
     },
   };
@@ -409,15 +412,44 @@ export function chartGeometry(ticker: string, periodDays: number, resolution: Re
 // --- 지수 ---
 
 export interface IndexQuote {
+  /** universe id */
+  id: string;
   name: string;
   value: number;
   changeRate: number;
   date: string;
 }
 
+/**
+ * 대시보드 상단 지수 스트립.
+ *
+ * indices.json(별도 파일)을 쓰지 않고 prices.json에서 직접 계산한다.
+ * 이유: 그 파일은 어떤 수집기도 갱신하지 않아 낡은 값이 남아 있었다
+ * (코스피 6,912 vs 실제 6,839). 단일 소스에서 파생하면 어긋날 수 없다.
+ */
+const STRIP_IDS = ['KS11', 'USDKRW', 'SPX', 'IXIC'];
+
 export function marketIndices(): IndexQuote[] {
-  const raw = indicesJson as Record<string, IndexQuote>;
-  return ['KS11', 'KQ11'].map(code => raw[code]).filter(Boolean);
+  const out: IndexQuote[] = [];
+
+  for (const id of STRIP_IDS) {
+    if (!hasPrices(id)) continue;
+    const meta = stocksRaw[id];
+    const md = marketData(id);
+    const s = md.stocks[id];
+    const last = s.c[s.c.length - 1];
+    const prev = s.c[s.c.length - 2] ?? last;
+
+    out.push({
+      id,
+      name: meta?.name ?? id,
+      value: last,
+      changeRate: prev === 0 ? 0 : ((last - prev) / prev) * 100,
+      date: md.tradingDate,
+    });
+  }
+
+  return out;
 }
 
 // --- 종목 메타 ---
@@ -426,17 +458,33 @@ export interface StockMeta {
   name: string;
   ticker: string;
   market: string;
+  currency: string;
+  type: string;
+  group: string;
 }
 
 export function stockMetaMap(): Record<string, StockMeta> {
-  return stocksJson as Record<string, StockMeta>;
+  // stocks.json은 { id, name, market, currency, type, group } 구조.
+  // 기존 코드와의 호환을 위해 ticker 필드를 추가해 반환한다.
+  const result: Record<string, StockMeta> = {};
+  for (const [id, raw] of Object.entries(stocksRaw)) {
+    result[id] = {
+      name: raw.name,
+      ticker: id,
+      market: raw.market,
+      currency: raw.currency,
+      type: raw.type,
+      group: raw.group,
+    };
+  }
+  return result;
 }
 
 export function stockMeta(ticker: string): StockMeta | null {
   return stockMetaMap()[ticker] ?? null;
 }
 
-/** 상세 페이지가 생성되는 종목인지 (정적 배포에서는 이 목록만 접근 가능) */
+/** 상세 페이지가 생성되는 종목인지 */
 export function hasDetailPage(ticker: string): boolean {
-  return ticker in stockMetaMap();
+  return ticker in stocksRaw;
 }

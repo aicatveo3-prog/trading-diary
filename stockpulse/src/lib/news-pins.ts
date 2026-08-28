@@ -78,7 +78,7 @@ export function buildNewsPins(
   periodDays: number,
   maxPins: number
 ): NewsPinResult {
-  const dates = tradingDates();
+  const dates = tradingDates(ticker);
   const articles = newsFor(ticker);
 
   // 거래일 인덱스 → 기사 목록
