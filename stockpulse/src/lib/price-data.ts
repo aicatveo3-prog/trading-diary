@@ -240,7 +240,7 @@ export interface ChartGeometry {
   nearestDay: (xPct: number) => number | null;
 }
 
-import { Resolution } from './events-data';
+import { Resolution } from './periods';
 
 const VIEW_W = 1000;
 const VIEW_H = 296;

@@ -7,7 +7,7 @@ import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
 import { pct, shortDate } from '@/lib/format';
 import { entryFor, formatPrice } from '@/lib/universe';
 import { useConvention } from '@/lib/convention-context';
-import { Resolution } from '@/lib/events-data';
+import { Resolution } from '@/lib/periods';
 
 interface PinnedChartProps {
   ticker: string;

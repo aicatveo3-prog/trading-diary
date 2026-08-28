@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { c, font } from '@/lib/tokens';
-import { PERIODS, PeriodKey, Resolution } from '@/lib/events-data';
+import { PERIODS, PeriodKey, Resolution } from '@/lib/periods';
 import { latestQuote, stockMeta, dateFor, closeSeries } from '@/lib/price-data';
 import { newsFor, sentimentSummary } from '@/lib/news-data';
 import { hasMinutes } from '@/lib/minute-data';

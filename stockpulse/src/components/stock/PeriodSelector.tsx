@@ -1,7 +1,7 @@
 'use client';
 
 import { c } from '@/lib/tokens';
-import { PERIODS, PeriodKey } from '@/lib/events-data';
+import { PERIODS, PeriodKey } from '@/lib/periods';
 
 interface PeriodSelectorProps {
   selected: PeriodKey;
