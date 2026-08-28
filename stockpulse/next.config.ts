@@ -14,6 +14,11 @@ const isPages = process.env.GITHUB_PAGES === 'true';
 const repoName = process.env.PAGES_BASE_PATH ?? '/trading-diary';
 
 const nextConfig: NextConfig = {
+  // 런타임에서 basePath를 알 수 있도록 환경 변수로 노출한다.
+  // minute-data.ts 등에서 fetch URL 경로 결정에 사용.
+  env: {
+    NEXT_PUBLIC_BASE_PATH: isPages ? repoName : '',
+  },
   ...(isPages
     ? {
         output: 'export' as const,

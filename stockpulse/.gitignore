@@ -35,3 +35,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
+# Python 수집 스크립트 캐시
+scripts/__pycache__/
+*.pyc
