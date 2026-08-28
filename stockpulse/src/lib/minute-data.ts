@@ -76,28 +76,50 @@ function basePath(): string {
   return process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 }
 
-function fileUrl(ticker: string, interval: MinuteInterval | '5m' | '1h'): string {
-  const key = typeof interval === 'number' ? (interval <= 5 ? '5m' : '1h') : interval;
-  return `${basePath()}/minutes/${ticker}_${key}.json`;
+/** 수집기가 만드는 파일의 해상도 종류 */
+type SourceFile = '5m' | '1h';
+
+/**
+ * 표시 간격 → 읽어야 할 원본 파일.
+ *
+ * 30분봉은 5분봉을 6개씩 묶어 만든다. 1시간봉 파일을 읽으면 한 바가 한
+ * 버킷에 하나씩 들어가 집계가 일어나지 않고, "30분봉"이라 표시하면서
+ * 실제로는 1시간봉을 보여주게 된다.
+ *
+ * 이 매핑이 두 곳(fileUrl·fetchMinuteFile)에 중복돼 있어서 실제로 그 버그가
+ * 났다. 한 곳에서만 정하고 양쪽이 함께 쓴다.
+ *
+ * 필요한 원본 범위도 맞는지 확인해 두었다:
+ *   30분봉 × 1주(5거래일) → 5m 파일은 최근 5거래일을 보관하므로 충분하다
+ */
+function sourceFileFor(interval: MinuteInterval): SourceFile {
+  return interval <= 30 ? '5m' : '1h';
+}
+
+function fileUrl(ticker: string, source: SourceFile): string {
+  return `${basePath()}/minutes/${ticker}_${source}.json`;
 }
 
 /**
  * 종목별 분봉 데이터를 fetch로 가져온다.
  * 캐시가 있으면 즉시 반환, 없으면 네트워크 요청.
+ *
+ * 캐시 키는 원본 파일 기준이다 — 5분봉과 30분봉은 같은 파일을 쓰므로
+ * 기간을 전환할 때 재요청이 필요 없다.
  */
 async function fetchMinuteFile(
   ticker: string,
   interval: MinuteInterval
 ): Promise<MinuteFileData | null> {
-  const key = `${ticker}_${interval <= 5 ? '5m' : '1h'}`;
+  const source = sourceFileFor(interval);
+  const key = `${ticker}_${source}`;
 
   if (cache.has(key)) return cache.get(key)!;
   if (inflight.has(key)) return inflight.get(key)!;
 
   const promise = (async () => {
     try {
-      const url = fileUrl(ticker, interval);
-      const res = await fetch(url);
+      const res = await fetch(fileUrl(ticker, source));
       if (!res.ok) return null;
       const data: MinuteFileData = await res.json();
       cache.set(key, data);
