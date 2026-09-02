@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fetch_descriptions import fetch_description_for_article
+from fetch_descriptions import fetch_description_for_article, resolve_google_news_url
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "src" / "data"
 KST = timezone(timedelta(hours=9))
@@ -66,6 +66,15 @@ def main() -> int:
     log(f"  크롤링 대상: {total}건" + (f" (--limit {args.limit})" if args.limit else ""))
     log(f"  예상 소요: ~{len(targets) * (args.delay + 0.5):.0f}초")
     log("")
+
+    # 디버그: 처음 3건의 URL 디코딩 결과를 보여준다
+    log("=== URL 디코딩 디버그 (처음 3건) ===")
+    for a in targets[:3]:
+        url = a["url"]
+        log(f"  Google URL: {url[:80]}...")
+        real = resolve_google_news_url(url, timeout=10)
+        log(f"  원문 URL:   {real[:80] if real else '(실패)'}")
+        log("")
 
     success = 0
     failed = 0
