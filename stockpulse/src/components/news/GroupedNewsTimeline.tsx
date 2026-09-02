@@ -212,10 +212,10 @@ function DayGroup({ group, isPinned, isSelected }: DayGroupProps) {
           )}
         </div>
 
-        {/* 그날의 기사들 */}
-        <div style={{ display: 'grid', gap: 12 }}>
+        {/* 그날의 기사들 — 요약은 핀이 꽂힌 '중요한 날'에만 보여 목록이 빽빽해지지 않게 한다 */}
+        <div style={{ display: 'grid', gap: 14 }}>
           {group.articles.map(article => (
-            <ArticleRow key={article.id} article={article} />
+            <ArticleRow key={article.id} article={article} showDescription={isPinned} />
           ))}
         </div>
       </div>
@@ -224,7 +224,7 @@ function DayGroup({ group, isPinned, isSelected }: DayGroupProps) {
 }
 
 /** 개별 기사 행 — description 표시 + related 접기/펼치기 */
-function ArticleRow({ article }: { article: NewsItem }) {
+function ArticleRow({ article, showDescription }: { article: NewsItem; showDescription: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const related = article.related ?? [];
   const hasRelated = related.length > 0;
@@ -248,28 +248,26 @@ function ArticleRow({ article }: { article: NewsItem }) {
       >
         <span style={{ fontSize: 11, marginTop: 3 }}>{sentimentDot(article.sentiment)}</span>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 500, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.5, color: c.ink }}>
             {article.title}
           </div>
-          {/* RSS description 요약 */}
-          {article.description && (
+          {/* 원문 요약 — 인용문 스타일로 시각적으로 분리 (왼쪽 세로선 + 들여쓰기) */}
+          {showDescription && article.description && (
             <div
               style={{
-                fontSize: 12,
-                lineHeight: 1.55,
-                color: c.inkMid,
-                marginTop: 4,
-                // 2줄까지만 표시
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
+                fontSize: 12.5,
+                lineHeight: 1.7,
+                color: c.inkBody,
+                marginTop: 7,
+                marginBottom: 2,
+                paddingLeft: 11,
+                borderLeft: `2px solid ${c.borderBtn}`,
               }}
             >
               {article.description}
             </div>
           )}
-          <div style={{ fontSize: 11, color: c.inkFaint, marginTop: 3 }}>
+          <div style={{ fontSize: 11, color: c.inkFaint, marginTop: 6 }}>
             {article.source}
             {' · '}
             {formatTime(article.publishedAt)}
