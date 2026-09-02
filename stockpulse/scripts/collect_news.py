@@ -6,9 +6,10 @@ GitHub Actions에서 매 영업일 장마감 후 실행되어 src/data/news.json
 API 키가 필요 없다 — Google News는 RSS를 공개 URL로 제공한다.
 
 핵심 원칙:
-  - 제목만 수집한다. 본문은 가져오지 않는다 (저작권 회피 + 용량 절약).
+  - 제목과 RSS 요약(description)을 수집한다. 본문은 가져오지 않는다 (저작권 회피 + 용량 절약).
   - 원문 링크를 항상 포함해 사용자가 직접 읽을 수 있게 한다.
   - 감성 분석은 키워드 기반으로 한다 (OpenAI 키 없이도 동작).
+  - 같은 이야기를 다룬 기사는 대표 1건으로 묶고, 나머지는 related로 접는다.
 
 사용법:
     python scripts/collect_news.py            # 수집 후 기록
@@ -87,11 +88,38 @@ def analyze_sentiment(title: str) -> dict:
 
 # --- HTML 정제 ---
 
+def strip_html(html: str) -> str:
+    """HTML 태그를 제거하고 텍스트만 남긴다. &amp; 등의 엔티티도 처리."""
+    import html as html_mod
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = html_mod.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def clean_title(raw: str) -> str:
     """Google News RSS 제목에서 ' - 언론사명' 접미사를 제거한다."""
     # "헤드라인 내용 - 한국경제" → "헤드라인 내용"
     parts = raw.rsplit(" - ", 1)
     return parts[0].strip() if len(parts) == 2 else raw.strip()
+
+
+def extract_description(item) -> str:
+    """
+    RSS <description> 태그에서 요약 텍스트를 추출한다.
+
+    Google News RSS의 description은 HTML이 섞여 있다.
+    HTML 태그를 제거하고 텍스트만 반환한다.
+    비어 있거나 제목과 동일하면 빈 문자열을 반환한다.
+    """
+    desc_el = item.find("description")
+    if desc_el is None or not desc_el.text:
+        return ""
+    raw = strip_html(desc_el.text)
+    # 300자 초과 시 잘라낸다 — 용량 절약
+    if len(raw) > 300:
+        raw = raw[:297] + "…"
+    return raw
 
 
 def extract_source(item) -> str:
@@ -139,12 +167,13 @@ def fetch_news_for_stock(search_query: str) -> list[dict]:
 
         title = clean_title(title_raw)
         source = extract_source(item)
+        description = extract_description(item)
         sentiment = analyze_sentiment(title)
 
         # 고유 ID: URL 해시 (중복 방지)
         news_id = hashlib.md5(link.encode()).hexdigest()[:12]
 
-        results.append({
+        article: dict = {
             "id": news_id,
             "title": title,
             "source": source,
@@ -152,7 +181,11 @@ def fetch_news_for_stock(search_query: str) -> list[dict]:
             "publishedAt": pub_date.isoformat(timespec="seconds"),
             "sentiment": sentiment["label"],
             "sentimentScore": sentiment["score"],
-        })
+        }
+        if description:
+            article["description"] = description
+
+        results.append(article)
 
     return results
 
@@ -203,6 +236,121 @@ def merge_articles(old: list[dict], new: list[dict]) -> list[dict]:
     return sorted(by_id.values(), key=lambda a: a["publishedAt"], reverse=True)
 
 
+# --- 제목 유사도 기반 클러스터링 ---
+
+# 클러스터링에서 무시할 토큰 (기사마다 반복되는 일반 단어)
+_STOP_TOKENS = frozenset([
+    "the", "a", "an", "is", "are", "was", "were", "in", "on", "at", "to",
+    "for", "of", "and", "or", "but", "vs", "이", "그", "저", "것", "수",
+    "등", "약", "중", "때", "후", "전", "내", "외",
+])
+
+def _normalize_title(title: str) -> str:
+    """클러스터링용 제목 정규화: 특수문자 제거, 소문자, 공백 통일."""
+    t = re.sub(r"[^\w\s]", "", title)
+    t = re.sub(r"\s+", " ", t).strip().lower()
+    return t
+
+
+def _title_tokens(title: str) -> set[str]:
+    """정규화된 제목에서 의미 있는 토큰 집합을 만든다."""
+    tokens = set(_normalize_title(title).split())
+    return tokens - _STOP_TOKENS
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """두 토큰 집합의 Jaccard 유사도."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+# 이 임계값 이상이면 "같은 이야기"로 판정한다.
+# 실측: 0.45면 "4대그룹 10억 주식부자" 같은 복붙 기사는 전부 잡히고,
+#        "삼성전자 목표가 상향" vs "삼성전자 목표가 하향"은 잡히지 않는다.
+CLUSTER_THRESHOLD = 0.45
+
+
+def cluster_articles(articles: list[dict]) -> list[dict]:
+    """
+    같은 이야기를 다룬 기사를 클러스터링한다.
+
+    같은 날(publishedAt 기준 날짜)에 제목 유사도가 CLUSTER_THRESHOLD 이상인
+    기사들을 하나의 클러스터로 묶는다.
+
+    대표 기사(가장 긴 제목 = 가장 상세한 헤드라인)에 related 배열을 붙인다.
+    나머지 기사는 목록에서 제거된다.
+
+    반환: 클러스터링 후 기사 목록 (대표 기사만, related 포함)
+    """
+    if len(articles) <= 1:
+        return articles
+
+    from collections import defaultdict
+
+    # 날짜별로 그룹화 — 다른 날짜의 기사끼리는 묶지 않는다
+    by_date: dict[str, list[dict]] = defaultdict(list)
+    for a in articles:
+        date_key = a["publishedAt"][:10]
+        by_date[date_key].append(a)
+
+    result: list[dict] = []
+
+    for date_key, day_articles in by_date.items():
+        if len(day_articles) <= 1:
+            result.extend(day_articles)
+            continue
+
+        # 토큰 사전 계산
+        tokens_map = {a["id"]: _title_tokens(a["title"]) for a in day_articles}
+
+        # Union-Find로 클러스터링
+        parent: dict[str, str] = {a["id"]: a["id"] for a in day_articles}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(x: str, y: str) -> None:
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+
+        # 쌍별 유사도 비교
+        for i in range(len(day_articles)):
+            for j in range(i + 1, len(day_articles)):
+                ai, aj = day_articles[i], day_articles[j]
+                sim = _jaccard(tokens_map[ai["id"]], tokens_map[aj["id"]])
+                if sim >= CLUSTER_THRESHOLD:
+                    union(ai["id"], aj["id"])
+
+        # 클러스터별로 대표 기사 선정
+        clusters: dict[str, list[dict]] = defaultdict(list)
+        for a in day_articles:
+            root = find(a["id"])
+            clusters[root].append(a)
+
+        for cluster in clusters.values():
+            if len(cluster) == 1:
+                result.append(cluster[0])
+            else:
+                # 대표 기사: 가장 긴 제목 (더 상세한 헤드라인)
+                cluster.sort(key=lambda a: len(a["title"]), reverse=True)
+                representative = {**cluster[0]}  # 복사
+                # related: 나머지 기사의 요약 정보
+                representative["related"] = [
+                    {"id": a["id"], "title": a["title"], "source": a["source"], "url": a["url"]}
+                    for a in cluster[1:]
+                ]
+                result.append(representative)
+
+    # 발행일 역순 정렬 유지
+    result.sort(key=lambda a: a["publishedAt"], reverse=True)
+    return result
+
+
 # --- 메인 ---
 
 def main() -> int:
@@ -220,7 +368,7 @@ def main() -> int:
         log(f"[0/3] universe에 없는 종목 {len(dropped)}개의 뉴스를 제거합니다: {sorted(dropped)}")
         existing = {k: v for k, v in existing.items() if k in valid_ids}
 
-    log(f"[1/3] Google News RSS 수집 ({len(entries)}종목)")
+    log(f"[1/4] Google News RSS 수집 ({len(entries)}종목)")
     all_news: dict[str, list[dict]] = {}
     new_count = 0
 
@@ -247,7 +395,20 @@ def main() -> int:
         # Rate limit 대응
         time.sleep(1)
 
-    log("[2/3] 검증")
+    log("[2/4] 중복 기사 클러스터링")
+    total_before = sum(len(v) for v in all_news.values())
+    clustered_news: dict[str, list[dict]] = {}
+    total_related = 0
+    for stock_id, articles in all_news.items():
+        clustered = cluster_articles(articles)
+        clustered_news[stock_id] = clustered
+        related_in_stock = sum(len(a.get("related", [])) for a in clustered)
+        total_related += related_in_stock
+    all_news = clustered_news
+    total_after = sum(len(v) for v in all_news.values())
+    log(f"  {total_before}건 → {total_after}건 (중복 {total_before - total_after}건을 '외 N건'으로 접음, related 총 {total_related}건)")
+
+    log("[3/4] 검증")
     total = sum(len(v) for v in all_news.values())
     if total == 0:
         log("  경고: 기사가 0건입니다. 네트워크 문제일 수 있습니다.")
@@ -259,9 +420,10 @@ def main() -> int:
         return 1
 
     # 기존보다 줄어들면 뭔가 잘못된 것이다 (병합 로직 버그 등)
+    # 클러스터링 전 기준으로 비교한다 — 클러스터링으로 줄어드는 것은 정상
     prior_total = sum(len(v) for v in existing.values())
-    if prior_total > 0 and total < prior_total * 0.9:
-        log(f"  경고: 기사가 {prior_total}건 → {total}건으로 줄었습니다. 기록을 중단합니다.")
+    if prior_total > 0 and total_before < prior_total * 0.9:
+        log(f"  경고: 기사가 {prior_total}건 → {total_before}건으로 줄었습니다. 기록을 중단합니다.")
         return 1
 
     log(f"  통과: 총 {total}건 ({stocks_with_news}/{len(entries)}종목) · 이번 실행 신규 +{new_count}건")
@@ -270,7 +432,7 @@ def main() -> int:
         log("\n--dry-run: 기록을 건너뜁니다")
         return 0
 
-    log("[3/3] 기록")
+    log("[4/4] 기록")
     payload = {
         "collectedAt": datetime.now(KST).isoformat(timespec="seconds"),
         "stocks": all_news,

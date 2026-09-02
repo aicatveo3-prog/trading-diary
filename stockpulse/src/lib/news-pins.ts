@@ -53,9 +53,22 @@ function nextTradingIndex(dateStr: string, dates: string[]): number | null {
 }
 
 /**
- * 중요도 = 기사 건수 × (|등락률| + 1)
+ * 대표 기사 + related를 합한 실제 기사 건수.
+ * 클러스터링 후 articles에는 대표 기사만 남고, 나머지는 related에 들어있다.
+ */
+function totalArticleCount(articles: NewsItem[]): number {
+  let count = 0;
+  for (const a of articles) {
+    count += 1 + (a.related?.length ?? 0);
+  }
+  return count;
+}
+
+/**
+ * 중요도 = 실제 기사 건수 × (|등락률| + 1)
  *
  * 기사가 많이 났고 주가도 크게 움직인 날이 가장 중요하다.
+ * related(같은 이야기를 다룬 다른 언론사 기사)도 건수에 포함한다.
  *
  * 등락률에 1을 더하는 이유: 단순히 곱하면 등락률이 0%인 날의 중요도가
  * 0이 되어, 기사가 아무리 많이 나도 핀에서 탈락한다. 그런데 "뉴스가
@@ -63,7 +76,7 @@ function nextTradingIndex(dateStr: string, dates: string[]): number | null {
  * 보정값을 두면 기사 건수가 최소한의 발언권을 갖는다.
  */
 function importance(pin: NewsPin): number {
-  return pin.articles.length * (Math.abs(pin.changeRate) + 1);
+  return totalArticleCount(pin.articles) * (Math.abs(pin.changeRate) + 1);
 }
 
 /**
@@ -144,6 +157,7 @@ export function buildNewsPins(
 
 /**
  * 핀 지름 — 기사 건수가 많을수록 크게, 상한을 둔다.
+ * related를 포함한 실제 기사 수를 넘겨야 한다.
  *
  * 등락률이 아니라 기사 건수를 쓰는 이유: 핀의 크기가 "얼마나 화제였는지"를
  * 나타내야 자연스럽다. 등락 방향은 색으로 이미 표현된다.
@@ -151,3 +165,5 @@ export function buildNewsPins(
 export function newsPinDiameter(articleCount: number): number {
   return Math.min(32, 18 + articleCount * 1.4);
 }
+
+export { totalArticleCount };

@@ -7,6 +7,13 @@
 
 import newsJson from '@/data/news.json';
 
+export interface RelatedArticle {
+  id: string;
+  title: string;
+  source: string;
+  url: string;
+}
+
 export interface NewsItem {
   id: string;
   title: string;
@@ -15,6 +22,10 @@ export interface NewsItem {
   publishedAt: string;
   sentiment: 'positive' | 'negative' | 'neutral';
   sentimentScore: number;
+  /** RSS <description>에서 추출한 요약 (있을 때만) */
+  description?: string;
+  /** 같은 이야기를 다룬 다른 언론사 기사 (클러스터링 결과) */
+  related?: RelatedArticle[];
 }
 
 interface NewsFile {
