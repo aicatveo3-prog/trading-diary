@@ -1,0 +1,71 @@
+name: Backfill Descriptions
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: '처리할 최대 기사 수 (0 = 전부)'
+        required: false
+        default: '0'
+
+concurrency:
+  group: backfill-descriptions
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: stockpulse
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 소급 적용
+        shell: bash
+        run: |
+          set -eo pipefail
+          python scripts/backfill_descriptions.py --limit ${{ github.event.inputs.limit }} 2>&1
+
+      - name: 변경 사항 커밋
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          if git diff --quiet -- src/data/news.json; then
+            echo "변경 없음 — 커밋을 건너뜁니다"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          DESC_COUNT=$(python3 -c "
+          import json
+          data=json.load(open('src/data/news.json'))
+          print(sum(1 for arts in data['stocks'].values() for a in arts if a.get('description')))
+          ")
+
+          git add src/data/news.json
+          git commit -m "chore(data): 뉴스 description 소급 적용 — ${DESC_COUNT}건"
+          git push
+
+          echo "### ✅ Description 소급 적용 완료" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "description이 채워진 기사: **${DESC_COUNT}건**" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: backfill
+    uses: ./.github/workflows/deploy-pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

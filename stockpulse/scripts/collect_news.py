@@ -408,7 +408,38 @@ def main() -> int:
     total_after = sum(len(v) for v in all_news.values())
     log(f"  {total_before}건 → {total_after}건 (중복 {total_before - total_after}건을 '외 N건'으로 접음, related 총 {total_related}건)")
 
-    log("[3/4] 검증")
+    log("[3/5] 원문 meta description 크롤링")
+    from fetch_descriptions import fetch_description_for_article
+    desc_added = 0
+    desc_failed = 0
+    desc_skipped = 0
+    # 대표 기사 중 description이 없는 것만 크롤링한다
+    targets = []
+    for stock_id, articles in all_news.items():
+        for a in articles:
+            if not a.get("description"):
+                targets.append(a)
+            else:
+                desc_skipped += 1
+    log(f"  대상: {len(targets)}건 (이미 있음: {desc_skipped}건)")
+    for i, article in enumerate(targets):
+        try:
+            desc = fetch_description_for_article(article["url"], timeout=8)
+            if desc:
+                article["description"] = desc
+                desc_added += 1
+            else:
+                desc_failed += 1
+        except Exception:
+            desc_failed += 1
+        # 진행 로그 — 100건마다
+        if (i + 1) % 100 == 0:
+            log(f"  ... {i+1}/{len(targets)} (성공 {desc_added}, 실패 {desc_failed})")
+        # 원문 사이트에 부담을 주지 않기 위한 간격
+        time.sleep(0.3)
+    log(f"  완료: 성공 {desc_added}건, 실패 {desc_failed}건")
+
+    log("[4/5] 검증")
     total = sum(len(v) for v in all_news.values())
     if total == 0:
         log("  경고: 기사가 0건입니다. 네트워크 문제일 수 있습니다.")
@@ -432,7 +463,7 @@ def main() -> int:
         log("\n--dry-run: 기록을 건너뜁니다")
         return 0
 
-    log("[4/4] 기록")
+    log("[5/5] 기록")
     payload = {
         "collectedAt": datetime.now(KST).isoformat(timespec="seconds"),
         "stocks": all_news,
