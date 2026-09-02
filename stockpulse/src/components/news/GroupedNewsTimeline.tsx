@@ -1,8 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import { c, font } from '@/lib/tokens';
-import { NewsItem } from '@/lib/news-data';
-import { NewsPin } from '@/lib/news-pins';
+import { NewsItem, RelatedArticle } from '@/lib/news-data';
+import { NewsPin, totalArticleCount } from '@/lib/news-pins';
 import { pct, shortDate } from '@/lib/format';
 import { dateFor } from '@/lib/price-data';
 import { useConvention } from '@/lib/convention-context';
@@ -25,7 +26,7 @@ export default function GroupedNewsTimeline({
   selectedDate,
   onSelectDate,
 }: GroupedNewsTimelineProps) {
-  const totalArticles = groups.reduce((sum, g) => sum + g.articles.length, 0);
+  const grandTotal = groups.reduce((sum, g) => sum + totalArticleCount(g.articles), 0);
 
   return (
     <div style={{ background: c.surface, border: `1px solid ${c.border}` }}>
@@ -44,7 +45,7 @@ export default function GroupedNewsTimeline({
           날짜별 타임라인
         </span>
         <span style={{ fontSize: 11.5, color: c.inkFaint }}>
-          {groups.length}일 · 기사 {totalArticles}건
+          {groups.length}일 · 기사 {grandTotal}건
         </span>
         {selectedDate && (
           <button
@@ -150,6 +151,7 @@ interface DayGroupProps {
 function DayGroup({ group, isPinned, isSelected }: DayGroupProps) {
   const { colors } = useConvention();
   const dirColor = group.changeRate >= 0 ? colors.up : colors.down;
+  const dayTotal = totalArticleCount(group.articles);
 
   return (
     <div
@@ -193,7 +195,7 @@ function DayGroup({ group, isPinned, isSelected }: DayGroupProps) {
           >
             {pct(group.changeRate)}
           </span>
-          <span style={{ fontSize: 11.5, color: c.inkFaint }}>기사 {group.articles.length}건</span>
+          <span style={{ fontSize: 11.5, color: c.inkFaint }}>기사 {dayTotal}건</span>
           {isPinned && (
             <span
               style={{
@@ -211,40 +213,127 @@ function DayGroup({ group, isPinned, isSelected }: DayGroupProps) {
         </div>
 
         {/* 그날의 기사들 */}
-        <div style={{ display: 'grid', gap: 9 }}>
+        <div style={{ display: 'grid', gap: 12 }}>
           {group.articles.map(article => (
-            <a
-              key={article.id}
-              href={article.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="gc-fade"
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '18px 1fr',
-                gap: 9,
-                alignItems: 'start',
-                color: c.ink,
-                textDecoration: 'none',
-              }}
-            >
-              <span style={{ fontSize: 11, marginTop: 3 }}>{sentimentDot(article.sentiment)}</span>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, lineHeight: 1.5 }}>
-                  {article.title}
-                </div>
-                <div style={{ fontSize: 11, color: c.inkFaint, marginTop: 3 }}>
-                  {article.source}
-                  {' · '}
-                  {formatTime(article.publishedAt)}
-                  {' · '}
-                  <span style={{ color: c.link }}>원문 ↗</span>
-                </div>
-              </div>
-            </a>
+            <ArticleRow key={article.id} article={article} />
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 개별 기사 행 — description 표시 + related 접기/펼치기 */
+function ArticleRow({ article }: { article: NewsItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const related = article.related ?? [];
+  const hasRelated = related.length > 0;
+
+  return (
+    <div>
+      {/* 대표 기사 */}
+      <a
+        href={article.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="gc-fade"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '18px 1fr',
+          gap: 9,
+          alignItems: 'start',
+          color: c.ink,
+          textDecoration: 'none',
+        }}
+      >
+        <span style={{ fontSize: 11, marginTop: 3 }}>{sentimentDot(article.sentiment)}</span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 500, lineHeight: 1.5 }}>
+            {article.title}
+          </div>
+          {/* RSS description 요약 */}
+          {article.description && (
+            <div
+              style={{
+                fontSize: 12,
+                lineHeight: 1.55,
+                color: c.inkMid,
+                marginTop: 4,
+                // 2줄까지만 표시
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}
+            >
+              {article.description}
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: c.inkFaint, marginTop: 3 }}>
+            {article.source}
+            {' · '}
+            {formatTime(article.publishedAt)}
+            {' · '}
+            <span style={{ color: c.link }}>원문 ↗</span>
+          </div>
+        </div>
+      </a>
+
+      {/* "외 N건" 토글 — 같은 이야기를 다룬 다른 언론사 기사 */}
+      {hasRelated && (
+        <div style={{ marginLeft: 27, marginTop: 5 }}>
+          <button
+            onClick={() => setExpanded(prev => !prev)}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '3px 0',
+              fontSize: 11.5,
+              color: c.inkSoft,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <span style={{
+              display: 'inline-block',
+              transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+              transition: 'transform 0.15s ease',
+              fontSize: 9,
+            }}>
+              ▶
+            </span>
+            유사 보도 {related.length}건
+          </button>
+
+          {expanded && (
+            <div style={{ marginTop: 4, paddingLeft: 2, display: 'grid', gap: 4 }}>
+              {related.map((r: RelatedArticle) => (
+                <a
+                  key={r.id}
+                  href={r.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="gc-fade"
+                  style={{
+                    display: 'block',
+                    fontSize: 12,
+                    lineHeight: 1.45,
+                    color: c.inkMid,
+                    textDecoration: 'none',
+                    paddingLeft: 8,
+                    borderLeft: `2px solid ${c.borderSoft}`,
+                  }}
+                >
+                  {r.title.length > 55 ? r.title.slice(0, 55) + '…' : r.title}
+                  <span style={{ color: c.inkFaint, fontSize: 10.5 }}> · {r.source}</span>
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { c } from '@/lib/tokens';
 import { chartGeometry, dateFor, dayQuote } from '@/lib/price-data';
-import { NewsPin, newsPinDiameter } from '@/lib/news-pins';
+import { NewsPin, newsPinDiameter, totalArticleCount } from '@/lib/news-pins';
 import { pct, shortDate } from '@/lib/format';
 import { entryFor, formatPrice } from '@/lib/universe';
 import { useConvention } from '@/lib/convention-context';
@@ -85,7 +85,7 @@ export default function PinnedChart({
       .sort((a, b) => a.pos.xPct - b.pos.xPct);
 
     for (const { pin, pos } of ordered) {
-      const size = newsPinDiameter(pin.articles.length);
+      const size = newsPinDiameter(totalArticleCount(pin.articles));
       const halfPct = (size / 2 / chartWidth) * 100;
       const leftPct = Math.max(halfPct, Math.min(100 - halfPct, pos.xPct));
 
@@ -370,7 +370,7 @@ export default function PinnedChart({
                 onMouseEnter={() => setHoveredDate(pin.tradingDate)}
                 onMouseLeave={() => setHoveredDate(null)}
                 onClick={() => onSelect(pin.tradingDate)}
-                aria-label={`${shortDate(dateFor(pin.daysAgo))} 뉴스 ${pin.articles.length}건, ${pct(pin.changeRate)}`}
+                aria-label={`${shortDate(dateFor(pin.daysAgo))} 뉴스 ${totalArticleCount(pin.articles)}건, ${pct(pin.changeRate)}`}
                 style={{
                   position: 'absolute',
                   left: `${leftPct}%`,
@@ -429,7 +429,7 @@ export default function PinnedChart({
                   borderRadius: 2,
                 }}
               >
-                뉴스 {hovered.articles.length}건
+                뉴스 {totalArticleCount(hovered.articles)}건
               </span>
               <span
                 style={{
@@ -457,9 +457,9 @@ export default function PinnedChart({
                 {a.title.length > 42 ? a.title.slice(0, 42) + '…' : a.title}
               </div>
             ))}
-            {hovered.articles.length > 3 && (
+            {totalArticleCount(hovered.articles) > 3 && (
               <div style={{ fontSize: 10.5, color: c.inkFaint, marginTop: 4 }}>
-                외 {hovered.articles.length - 3}건 · 클릭하면 아래에서 전부 보기
+                외 {totalArticleCount(hovered.articles) - 3}건 · 클릭하면 아래에서 전부 보기
               </div>
             )}
           </div>
