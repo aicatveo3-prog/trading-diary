@@ -29,6 +29,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: 의존성 설치
+        run: pip install --quiet googlenewsdecoder
+
       - name: 소급 적용
         shell: bash
         run: |

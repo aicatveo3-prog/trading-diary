@@ -43,7 +43,7 @@ jobs:
       #   1. 분봉 전체 (collect_minutes.py) — FDR은 분봉을 제공하지 않는다
       #   2. USD/KRW 일봉 — FDR의 환율 날짜가 하루 밀리는 버그가 있다
       - name: 의존성 설치
-        run: pip install --quiet finance-datareader yfinance
+        run: pip install --quiet finance-datareader yfinance googlenewsdecoder
 
       # 아래 수집 단계들은 출력을 PIPELINE_LOG에 함께 기록한다.
       # set -o pipefail이 없으면 tee의 종료 코드(항상 0)가 파이썬의 실패를
